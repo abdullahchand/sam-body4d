@@ -144,7 +144,7 @@ class SAM3DBodyEstimator:
             masks_score = None
             if masks[i] is not None:
                 # Use provided masks - ensure they match the number of detected boxes
-                print(f"Using provided masks: {masks[i].shape}")
+                # print(f"Using provided masks: {masks[i].shape}")
                 assert (
                     bboxes[i] is not None
                 ), "Mask-conditioned inference requires bboxes input!"
@@ -166,7 +166,7 @@ class SAM3DBodyEstimator:
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
             if cam_int is not None:
-                print("Using provided camera intrinsics...")
+                # print("Using provided camera intrinsics...")
                 cam_int = cam_int.to(batch["img"])
                 batch["cam_int"] = cam_int.clone()
             elif self.fov_estimator is not None:
