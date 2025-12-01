@@ -155,6 +155,7 @@ def read_video_metadata(path: str):
     fps = cap.get(cv2.CAP_PROP_FPS)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
+    RUNTIME['video_fps'] = fps
     return fps, total
 
 
@@ -465,7 +466,7 @@ def on_mask_generation(video_path: str):
         msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx:08d}.png"))
 
     out_video_path = os.path.join(OUTPUT_DIR, 'video_mask.mp4')
-    images_to_mp4(img_to_video, out_video_path)
+    images_to_mp4(img_to_video, out_video_path, fps=RUNTIME['video_fps'])
 
     return out_video_path
 
@@ -544,7 +545,7 @@ def on_4d_generation(video_path: str):
                 rend_img.astype(np.uint8),
             )
 
-    jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", f"{OUTPUT_DIR}/4d.mp4", fps=25)
+    jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", f"{OUTPUT_DIR}/4d.mp4", fps=RUNTIME['video_fps'])
 
     return f"{OUTPUT_DIR}/4d.mp4"
 
