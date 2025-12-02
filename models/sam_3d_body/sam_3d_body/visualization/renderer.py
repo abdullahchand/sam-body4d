@@ -319,10 +319,9 @@ class Renderer:
             end = start + V
             # mesh_base_color must be list-like: [(r,g,b), ...]
             color = mesh_base_color[pid]
-            # rgba = np.array([color[0], color[1], color[2], 1.0]) * 255
-            r, g, b = colorsys.hsv_to_rgb(color[0], color[1], color[2])
-            rgba = np.array([r, g, b, 1.0], dtype=np.float32) * 255
-            # rgba = np.array([color[2], color[1], color[0], 1.0], dtype=np.float32) * 255
+            b, g, r = color[2], color[1], color[0]
+            rgba = np.array([b, g, r, 255], dtype=np.float32)   # * 255
+            rgba = rgba.astype(np.uint8)
             vertex_colors[start:end] = rgba
 
         # Create a single trimesh with per-vertex colors
