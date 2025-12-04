@@ -4,3 +4,4 @@ gradio_tmp/
 outputs/
 *.egg-info
 4db.yaml
+save_masks.py

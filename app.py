@@ -21,11 +21,11 @@ sys.path.append(os.path.join(current_dir, 'models', 'sam_3d_body'))
 sys.path.append(os.path.join(current_dir, 'models', 'diffusion_vas'))
 
 # import sam3
-from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, resize_mask_with_unique_label, keep_largest_component
+from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, resize_mask_with_unique_label, keep_largest_component, is_skinny_mask
 
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask
-from models.sam_3d_body.tools.vis_utils import visualize_sample_together
+from models.sam_3d_body.tools.vis_utils import visualize_sample_together, visualize_sample
 from models.diffusion_vas.demo import init_amodal_segmentation_model, init_rgb_model, init_depth_model, load_and_transform_masks, load_and_transform_rgbs, rgb_to_depth
 
 import torch
@@ -580,11 +580,12 @@ def on_4d_generation(video_path: str):
     )
 
     os.makedirs(f"{OUTPUT_DIR}/mask_4d", exist_ok=True)
+    os.makedirs(f"{OUTPUT_DIR}/mask_4d_individual", exist_ok=True)
     batch_size = RUNTIME['batch_size']
     n = len(images_list)
     
     # Optional, detect occlusions
-    pred_res = [256, 512]
+    pred_res = [512, 1024]
     pred_res_hi = [512, 1024]
     modal_pixels_list = []
     if pipeline_mask is not None:
@@ -605,9 +606,6 @@ def on_4d_generation(video_path: str):
         idx_path = {}
         if len(modal_pixels_list) > 0:
             print("detect occlusions ...")
-            # rgb_pixels_batch = rgb_pixels[:, i:i + batch_size, :, :, :]
-            # raw_rgb_pixels_batch = raw_rgb_pixels[i:i + batch_size, :, :, :]
-            # modal_pixels_batch = torch.cat([mp[:, i:i + batch_size, :, :, :] for mp in modal_pixels_list], dim=0)
             pred_amodal_masks_dict = {}
             for (modal_pixels, obj_id) in zip(modal_pixels_list, RUNTIME['out_obj_ids']):
                 # predict amodal masks (amodal segmentation)
@@ -657,6 +655,8 @@ def on_4d_generation(video_path: str):
                     if masks[pi].sum() > pred_amodal_masks[pi].sum():
                         pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                     elif is_super_long_or_wide(pamc, obj_id):
+                        pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
+                    elif is_skinny_mask(pamc):
                         pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                 
                 # confirm occlusions & save masks (for HMR)
@@ -738,6 +738,12 @@ def on_4d_generation(video_path: str):
                 f"{OUTPUT_DIR}/mask_4d/{os.path.basename(image_path)[:-4]}.jpg",
                 rend_img.astype(np.uint8),
             )
+            rend_img_list = visualize_sample(img, mask_output, sam3_3d_body_model.faces, id_current)
+            for ri, rend_img in enumerate(rend_img_list):
+                cv2.imwrite(
+                    f"{OUTPUT_DIR}/mask_4d_individual/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                    rend_img.astype(np.uint8),
+                )
 
     jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", f"{OUTPUT_DIR}/4d.mp4", fps=RUNTIME['video_fps'])
 

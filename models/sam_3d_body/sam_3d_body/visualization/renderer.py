@@ -272,8 +272,6 @@ class Renderer:
         tri_color_lights=False,
         return_rgba=False,
         camera_center=None,
-        id_batch=None,
-        id_sorted=None,
     ) -> np.array:
         """
         Render meshes on the input image.
@@ -318,7 +316,10 @@ class Renderer:
             start = pid * V
             end = start + V
             # mesh_base_color must be list-like: [(r,g,b), ...]
-            color = mesh_base_color[pid]
+            if isinstance(mesh_base_color[0], list):
+                color = mesh_base_color[pid]
+            else:
+                color = mesh_base_color
             b, g, r = color[2], color[1], color[0]
             rgba = np.array([b, g, r, 255], dtype=np.float32)   # * 255
             rgba = rgba.astype(np.uint8)

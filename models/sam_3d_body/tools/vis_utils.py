@@ -12,126 +12,67 @@ visualizer = SkeletonVisualizer(line_width=2, radius=5)
 visualizer.set_pose_meta(mhr70_pose_info)
 
 
-def visualize_sample(img_cv2, outputs, faces):
-    img_keypoints = img_cv2.copy()
-    img_mesh = img_cv2.copy()
+def visualize_sample(img_cv2, outputs, faces, id_current):
+	img_mesh = img_cv2.copy()
+	img_mesh = np.ones_like(img_mesh) * 255
 
-    rend_img = []
-    for pid, person_output in enumerate(outputs):
-        keypoints_2d = person_output["pred_keypoints_2d"]
-        keypoints_2d = np.concatenate(
-            [keypoints_2d, np.ones((keypoints_2d.shape[0], 1))], axis=-1
-        )
-        img1 = visualizer.draw_skeleton(img_keypoints.copy(), keypoints_2d)
+	rend_img = []
+	for pid, person_output in enumerate(outputs):
+		renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
+		img2 = (
+			renderer(
+				person_output["pred_vertices"],
+				person_output["pred_cam_t"],
+				img_mesh.copy(),
+				mesh_base_color=color_list[id_current[pid]+4],
+				scene_bg_color=(1, 1, 1),
+			)
+			* 255
+		)
 
-        img1 = cv2.rectangle(
-            img1,
-            (int(person_output["bbox"][0]), int(person_output["bbox"][1])),
-            (int(person_output["bbox"][2]), int(person_output["bbox"][3])),
-            (0, 255, 0),
-            2,
-        )
+		# cur_img = np.concatenate([img_cv2, img1, img2, img3], axis=1)
+		rend_img.append(img2)
 
-        if "lhand_bbox" in person_output:
-            img1 = cv2.rectangle(
-                img1,
-                (
-                    int(person_output["lhand_bbox"][0]),
-                    int(person_output["lhand_bbox"][1]),
-                ),
-                (
-                    int(person_output["lhand_bbox"][2]),
-                    int(person_output["lhand_bbox"][3]),
-                ),
-                (255, 0, 0),
-                2,
-            )
-
-        if "rhand_bbox" in person_output:
-            img1 = cv2.rectangle(
-                img1,
-                (
-                    int(person_output["rhand_bbox"][0]),
-                    int(person_output["rhand_bbox"][1]),
-                ),
-                (
-                    int(person_output["rhand_bbox"][2]),
-                    int(person_output["rhand_bbox"][3]),
-                ),
-                (0, 0, 255),
-                2,
-            )
-
-        renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
-        img2 = (
-            renderer(
-                person_output["pred_vertices"],
-                person_output["pred_cam_t"],
-                img_mesh.copy(),
-                mesh_base_color=LIGHT_BLUE,
-                scene_bg_color=(1, 1, 1),
-            )
-            * 255
-        )
-
-        white_img = np.ones_like(img_cv2) * 255
-        img3 = (
-            renderer(
-                person_output["pred_vertices"],
-                person_output["pred_cam_t"],
-                white_img,
-                mesh_base_color=LIGHT_BLUE,
-                scene_bg_color=(1, 1, 1),
-                side_view=True,
-            )
-            * 255
-        )
-
-        cur_img = np.concatenate([img_cv2, img1, img2, img3], axis=1)
-        rend_img.append(cur_img)
-
-    return rend_img
+	return rend_img
 
 def visualize_sample_together(img_cv2, outputs, faces, id_current):
-    # Render everything together
-    img_mesh = img_cv2.copy()
-    img_mesh = np.ones_like(img_mesh) * 255
+	# Render everything together
+	img_mesh = img_cv2.copy()
+	img_mesh = np.ones_like(img_mesh) * 255
 
-    # First, sort by depth, furthest to closest
-    all_depths = np.stack([tmp['pred_cam_t'] for tmp in outputs], axis=0)[:, 2]
-    outputs_sorted = [outputs[idx] for idx in np.argsort(-all_depths)]
+	# First, sort by depth, furthest to closest
+	all_depths = np.stack([tmp['pred_cam_t'] for tmp in outputs], axis=0)[:, 2]
+	outputs_sorted = [outputs[idx] for idx in np.argsort(-all_depths)]
 
-    id_sorted = np.argsort(-all_depths)   # by id not depth for consistent coloring
+	id_sorted = np.argsort(-all_depths)   # by id not depth for consistent coloring
 
-    # Then, put all meshes together as one super mesh
-    all_pred_vertices = []
-    all_faces = []
-    all_color = []
-    for pid, person_output in enumerate(outputs_sorted):
-        all_pred_vertices.append(person_output["pred_vertices"] + person_output["pred_cam_t"])
-        all_faces.append(faces + len(person_output["pred_vertices"]) * pid)
-        all_color.append(color_list[id_current[id_sorted[pid]]+4])
-    all_pred_vertices = np.concatenate(all_pred_vertices, axis=0)
-    all_faces = np.concatenate(all_faces, axis=0)
+	# Then, put all meshes together as one super mesh
+	all_pred_vertices = []
+	all_faces = []
+	all_color = []
+	for pid, person_output in enumerate(outputs_sorted):
+		all_pred_vertices.append(person_output["pred_vertices"] + person_output["pred_cam_t"])
+		all_faces.append(faces + len(person_output["pred_vertices"]) * pid)
+		all_color.append(color_list[id_current[id_sorted[pid]]+4])
+	all_pred_vertices = np.concatenate(all_pred_vertices, axis=0)
+	all_faces = np.concatenate(all_faces, axis=0)
 
-    # Pull out a fake translation; take the closest two
-    fake_pred_cam_t = (np.max(all_pred_vertices[-2*18439:], axis=0) + np.min(all_pred_vertices[-2*18439:], axis=0)) / 2
-    all_pred_vertices = all_pred_vertices - fake_pred_cam_t
-    
-    # Render front view
-    renderer = Renderer(focal_length=person_output["focal_length"], faces=all_faces)
-    img_mesh = (
-        renderer(
-            all_pred_vertices,
-            fake_pred_cam_t,
-            img_mesh,
-            # mesh_base_color=LIGHT_BLUE,
-            mesh_base_color=all_color,
-            scene_bg_color=(1, 1, 1),
-            id_batch=id_current, 
-            id_sorted=id_sorted,
-        )
-        * 255
-    )
+	# Pull out a fake translation; take the closest two
+	fake_pred_cam_t = (np.max(all_pred_vertices[-2*18439:], axis=0) + np.min(all_pred_vertices[-2*18439:], axis=0)) / 2
+	all_pred_vertices = all_pred_vertices - fake_pred_cam_t
+	
+	# Render front view
+	renderer = Renderer(focal_length=person_output["focal_length"], faces=all_faces)
+	img_mesh = (
+		renderer(
+			all_pred_vertices,
+			fake_pred_cam_t,
+			img_mesh,
+			# mesh_base_color=LIGHT_BLUE,
+			mesh_base_color=all_color,
+			scene_bg_color=(1, 1, 1),
+		)
+		* 255
+	)
 
-    return img_mesh
+	return img_mesh

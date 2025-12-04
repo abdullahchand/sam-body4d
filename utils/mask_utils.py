@@ -66,3 +66,38 @@ def keep_largest_component(mask: np.ndarray) -> np.ndarray:
     largest_mask = (labels == largest_label).astype(mask.dtype)
     return largest_mask
 
+
+import numpy as np
+
+def is_skinny_mask(mask, ratio_threshold=1/5):
+    """
+    Determine whether the foreground region in the mask is very skinny,
+    based on the bounding box aspect ratio.
+
+    Args:
+        mask (np.ndarray): Binary or multi-value mask of shape (H, W).
+                           Foreground pixels are defined as > 0.
+        ratio_threshold (float): Threshold for min(h, w) / max(h, w).
+                                 Default = 1/5.
+
+    Returns:
+        bool: True if the object is skinny (ratio < threshold), else False.
+    """
+
+    # Get coordinates of foreground pixels
+    ys, xs = np.where(mask > 0)
+
+    # If no foreground exists
+    if len(xs) == 0:
+        return False
+
+    # Compute bounding box height and width
+    h = ys.max() - ys.min() + 1
+    w = xs.max() - xs.min() + 1
+
+    # Compute the smaller-to-larger side ratio
+    ratio = min(h, w) / max(h, w)
+
+    # Check if the object is considered skinny
+    return ratio < ratio_threshold
+
