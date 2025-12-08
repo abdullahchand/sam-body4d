@@ -1,4 +1,9 @@
-<h1 align="center">🏂 SAM-Body4D</h1>
+<!-- <h1 align="center">🏂 SAM-Body4D</h1> -->
+
+# 🏂 SAM-Body4D
+
+[ 📖 [`Paper` (coming soon)]()] [ 🌐 [`Website` (coming soon)](https://seominseok0429.github.io/Upsample-Anything/)] [ 📝 [`BibTeX` (coming soon)](#-citation)]
+
 
 **SAM-Body4D** is a **training-free** method for **temporally consistent** and **robust** 4D human mesh recovery from videos.
 By leveraging **pixel-level human continuity** from promptable video segmentation **together with occlusion recovery**, it reliably preserves identity and full-body geometry in challenging in-the-wild scenes.
@@ -42,8 +47,11 @@ pip install -e .
 python app.py
 ```
 
-## 📖 Citation
-
+## 📝 Citation
+If you find this repository useful, please consider giving a star ⭐ and citation.
+```
+coming soon
+```
 
 ## 👏 Acknowledgements
 

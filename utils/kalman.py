@@ -1,41 +1,41 @@
-import numpy as np
-
 import torch
 import numpy as np
 
-def kalman_smooth_constant_velocity_safe(Y,
-                                         q_pos=1e-4,
-                                         q_vel=1e-6,
-                                         r_obs=1e-2):
+def kalman_smooth_constant_velocity_safe(Y, q_pos=1e-4, q_vel=1e-6, r_obs=1e-2):
     """
     Robust constant-velocity Kalman smoothing on (T, D).
+
+    Y: (T, D) numpy array of valid observations for a single obj_id.
+       Missing frames are handled outside this function.
     """
     Y = np.asarray(Y, dtype=np.float32)
     T, D = Y.shape
     if T == 0:
         return Y.copy()
 
+    # Remove NaN / inf from input
     Y = np.nan_to_num(Y, nan=0.0, posinf=0.0, neginf=0.0)
 
     q_pos = float(max(q_pos, 0.0))
     q_vel = float(max(q_vel, 0.0))
     r_obs = float(max(r_obs, 1e-12))
 
-    x = Y[0].copy()
-    v = np.zeros(D, dtype=np.float32)
+    # Initial state: first observation as position, zero velocity
+    x = Y[0].copy()                   # (D,)
+    v = np.zeros(D, dtype=np.float32) # (D,)
 
     Pxx = np.ones(D, dtype=np.float32)
     Pxv = np.zeros(D, dtype=np.float32)
     Pvv = np.ones(D, dtype=np.float32)
 
-    X_smooth = np.zeros_like(Y)
-    X_smooth[0] = x
+    X = np.zeros_like(Y)
+    X[0] = x
 
     eps = 1e-8
     max_val = 1e6
 
     for t in range(1, T):
-        # Prediction
+        # ---- Prediction ----
         x_pred = x + v
         v_pred = v
 
@@ -47,6 +47,7 @@ def kalman_smooth_constant_velocity_safe(Y,
         Pxv_pred = np.clip(Pxv_pred, -max_val, max_val)
         Pvv_pred = np.clip(Pvv_pred, -max_val, max_val)
 
+        # ---- Update ----
         y = Y[t]
         S = Pxx_pred + r_obs
         S = np.where(np.abs(S) < eps, eps, S)
@@ -63,16 +64,17 @@ def kalman_smooth_constant_velocity_safe(Y,
         Pxv = (1.0 - K_pos) * Pxv_pred
         Pvv = Pvv_pred - K_vel * Pxv_pred
 
+        # Clamp to avoid NaNs / inf
         x = np.nan_to_num(x, nan=0.0, posinf=max_val, neginf=-max_val)
         v = np.nan_to_num(v, nan=0.0, posinf=max_val, neginf=-max_val)
         Pxx = np.nan_to_num(Pxx, nan=1.0, posinf=max_val, neginf=0.0)
         Pxv = np.nan_to_num(Pxv, nan=0.0, posinf=max_val, neginf=-max_val)
         Pvv = np.nan_to_num(Pvv, nan=1.0, posinf=max_val, neginf=0.0)
 
-        X_smooth[t] = x
+        X[t] = x
 
-    X_smooth = np.nan_to_num(X_smooth, nan=0.0, posinf=max_val, neginf=-max_val)
-    return X_smooth
+    X = np.nan_to_num(X, nan=0.0, posinf=max_val, neginf=-max_val)
+    return X
 
 import torch
 
@@ -85,26 +87,28 @@ def kalman_smooth_mhr_params_multi_human_with_ids(
     empty_thresh=1e-6,
 ):
     """
-    Kalman smoothing for MHR parameters when B = T * N, using per-frame obj_ids
-    to detect missing humans.
+    Apply Kalman smoothing per obj_id, using only frames where this obj_id exists.
 
-    Args:
-        mhr_dict: dict of tensors, each of shape (B, D), B = num_frames * num_humans.
-        num_frames: int, T.
-        frame_obj_ids: list of length T; each element is a list of obj_ids present
-                       in that frame. obj_id starts from 1 and corresponds to
-                       human index (obj_id - 1).
-                       Example: frame_obj_ids[t] = [1, 3] means
-                                human 0 and human 2 are present at frame t,
-                                human 1 is missing in this frame.
-        keys_to_smooth: list of keys to apply Kalman on, e.g. ["body_pose", "hand"].
-        kalman_cfg: dict: key -> {q_pos, q_vel, r_obs}.
-        empty_thresh: if the valid part of a track has very small norm, it is
-                      treated as empty and left unchanged.
+    Data layout (unchanged):
+        - mhr_dict[key]: (B, D), B = num_frames * num_humans
+        - Flatten order in B:
+              frame 0: slots 0..num_humans-1
+              frame 1: slots 0..num_humans-1
+              ...
+        - slot index s in [0, num_humans) corresponds to obj_id = s + 1.
 
-    Returns:
-        new_mhr: dict with the same structure as mhr_dict, but selected keys
-                 are temporally smoothed for valid frames of each human.
+    frame_obj_ids:
+        - list of length num_frames
+        - frame_obj_ids[t] is a list of obj_id (1-based) present in frame t
+
+    Behavior:
+        - For each key in keys_to_smooth and each obj_id:
+            * Build the list of (frame, B_index) where this obj_id exists.
+            * Extract these rows as a track Y_valid of shape (T_valid, D).
+            * Run Kalman on Y_valid (only valid frames are history).
+            * Write smoothed values back only to those B_indices.
+        - Missing frames for this obj_id are never used as Kalman history
+          and keep their original values in mhr_dict.
     """
     if keys_to_smooth is None:
         keys_to_smooth = ["body_pose", "hand"]
@@ -115,7 +119,6 @@ def kalman_smooth_mhr_params_multi_human_with_ids(
             "hand":      dict(q_pos=4e-4, q_vel=4e-4, r_obs=1.2e-1),
         }
 
-    # Sanity check for frame_obj_ids length
     assert len(frame_obj_ids) == num_frames, "frame_obj_ids length must equal num_frames"
 
     new_mhr = {}
@@ -132,29 +135,31 @@ def kalman_smooth_mhr_params_multi_human_with_ids(
             device = v.device
             B, D = v.shape
 
-            # (B, D) -> (T, N, D)
-            v_np = v.detach().cpu().numpy().reshape(num_frames, num_humans, D)
+            v_np = v.detach().cpu().numpy()  # (B, D)
 
-            for h in range(num_humans):
-                # Build a boolean mask over time:
-                # valid_mask[t] = True if human (h+1) is present in frame t.
-                valid_mask = np.array(
-                    [(h + 1) in ids for ids in frame_obj_ids],
-                    dtype=bool
-                )
+            # Loop over obj_id = 1..num_humans
+            for obj_id in range(1, num_humans + 1):
+                slot = obj_id - 1  # slot index in [0, num_humans)
 
-                # If this human never appears, skip smoothing.
-                if not valid_mask.any():
+                # Collect all B indices where this obj_id is present
+                valid_indices = []
+                for t in range(num_frames):
+                    if obj_id in frame_obj_ids[t]:
+                        # B index = t * num_humans + slot
+                        idx = t * num_humans + slot
+                        valid_indices.append(idx)
+
+                # If this obj_id never appears, skip
+                if len(valid_indices) == 0:
                     continue
 
-                track_full = v_np[:, h, :]           # (T, D)
-                track_valid = track_full[valid_mask] # (Tv, D), Tv = number of valid frames
+                track_valid = v_np[valid_indices, :]  # (T_valid, D)
 
-                # If the valid part is essentially empty (all zeros), skip smoothing.
+                # Skip almost-empty tracks
                 if np.linalg.norm(track_valid) < empty_thresh:
                     continue
 
-                # Run Kalman only on valid frames
+                # Run Kalman only on valid frames for this obj_id
                 smoothed_valid = kalman_smooth_constant_velocity_safe(
                     track_valid,
                     q_pos=cfg["q_pos"],
@@ -162,18 +167,16 @@ def kalman_smooth_mhr_params_multi_human_with_ids(
                     r_obs=cfg["r_obs"],
                 )
 
-                # If smoothing generated NaNs/inf, fall back to original.
+                # If something went wrong, keep original
                 if not np.isfinite(smoothed_valid).all():
                     continue
 
-                # Write back smoothed values only at valid frames,
-                # keep original values for missing frames.
-                v_np[valid_mask, h, :] = smoothed_valid
+                # Write smoothed values back to those valid indices
+                v_np[valid_indices, :] = smoothed_valid
 
-            # Back to (B, D)
-            v_smooth = torch.from_numpy(v_np.reshape(B, D)).to(device)
-            new_mhr[k] = v_smooth
+            new_mhr[k] = torch.from_numpy(v_np).to(device)
         else:
+            # Keys we do not smooth are copied unchanged
             new_mhr[k] = v
 
     return new_mhr
