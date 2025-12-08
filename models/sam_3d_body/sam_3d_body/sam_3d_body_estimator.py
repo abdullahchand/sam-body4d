@@ -230,6 +230,7 @@ class SAM3DBodyEstimator:
             idx_path=idx_path,
             idx_dict=idx_dict,
             mhr_shape_scale_dict=mhr_shape_scale_dict,
+            id_batch=id_batch,
         )
         if inference_type == "full":
             pose_output, batch_lhand, batch_rhand, _, _ = outputs

@@ -1,4 +1,7 @@
+import cv2
+from PIL import Image
 import numpy as np
+
 
 def is_super_long_or_wide(mask, label, ratio=0.7):
     # Find foreground pixels of the specified label
@@ -20,7 +23,6 @@ def is_super_long_or_wide(mask, label, ratio=0.7):
     # relative to the entire image (e.g., ≥ 90%)
     return (bbox_w / w >= ratio) or (bbox_h / h >= ratio)
 
-from PIL import Image
 
 def resize_mask_with_unique_label(mask, target_h, target_w, label):
     """
@@ -41,7 +43,6 @@ def resize_mask_with_unique_label(mask, target_h, target_w, label):
 
     return mask_out
 
-import cv2
 
 def keep_largest_component(mask: np.ndarray) -> np.ndarray:
     """
@@ -66,8 +67,6 @@ def keep_largest_component(mask: np.ndarray) -> np.ndarray:
     largest_mask = (labels == largest_label).astype(mask.dtype)
     return largest_mask
 
-
-import numpy as np
 
 def is_skinny_mask(mask, ratio_threshold=1/5):
     """
@@ -100,6 +99,7 @@ def is_skinny_mask(mask, ratio_threshold=1/5):
 
     # Check if the object is considered skinny
     return ratio < ratio_threshold
+
 
 def bbox_from_mask(mask):
     """

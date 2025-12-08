@@ -29,7 +29,7 @@ from ..modules.transformer import FFN, MLP
 
 from .base_model import BaseModel
 
-from utils import kalman_smooth_mhr_params_multi_human, smooth_scale_shape_local
+from utils import kalman_smooth_mhr_params_multi_human_with_ids, smooth_scale_shape_local
 
 
 logger = get_pylogger(__name__)
@@ -1663,6 +1663,7 @@ class SAM3DBody(BaseModel):
         idx_path=None,
         idx_dict=None,
         mhr_shape_scale_dict=None, 
+        id_batch=None,
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -2125,9 +2126,10 @@ class SAM3DBody(BaseModel):
                 "hand":      dict(q_pos=4e-4, q_vel=4e-4, r_obs=1.2e-1),
             }
 
-            pose_output["mhr"] = kalman_smooth_mhr_params_multi_human(
+            pose_output["mhr"] = kalman_smooth_mhr_params_multi_human_with_ids(
                 pose_output["mhr"],
                 num_frames=len(img_list),
+                frame_obj_ids=id_batch,
                 keys_to_smooth=["body_pose", "hand"],
                 kalman_cfg=kalman_cfg,
             )
@@ -2159,26 +2161,6 @@ class SAM3DBody(BaseModel):
             # Back to original shape: (B, D)
             pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
             pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
-
-            # # Smooth global_rot using a local temporal window (sliding average)
-            # # Works well when the person is mostly facing a fixed direction.
-            # global_rot = pose_output["mhr"]["global_rot"]  # shape: (B, 3)
-            # B, D = global_rot.shape
-            # # Reshape to (T, N, 3) so each human is smoothed independently 
-            # rot_3d = global_rot.view(num_frames, num_human, D)  # (T, N, 3)
-            # # Local window size for temporal smoothing (e.g., 7)
-            # window = 7
-            # half = window // 2
-            # rot_smooth = rot_3d.clone()
-            # # Sliding average per human
-            # for h in range(num_human):
-            #     for t in range(num_frames):
-            #         s = max(0, t - half)
-            #         e = min(num_frames, t + half + 1)
-            #         rot_smooth[t, h] = rot_3d[s:e, h].mean(dim=0)
-            # # Back to (B, 3)
-            # pose_output["mhr"]["global_rot"] = rot_smooth.view(B, D)
-
 
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(

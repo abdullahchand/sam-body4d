@@ -351,8 +351,10 @@ class Renderer:
         # ------------------------------------------------------
         # IMPORTANT: Do NOT pass material, so vertex_colors are used
         # ------------------------------------------------------
-        mesh = pyrender.Mesh.from_trimesh(mesh, smooth=True)
-
+        try:
+            mesh = pyrender.Mesh.from_trimesh(mesh, smooth=True)
+        except:
+            a = 1
         # Build pyrender scene
         scene = pyrender.Scene(
             bg_color=[*scene_bg_color, 0.0],

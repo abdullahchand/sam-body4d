@@ -611,6 +611,8 @@ def on_4d_generation(video_path: str):
                         ious[pi] = 1.0
                     elif is_skinny_mask(pamc):
                         ious[pi] = 1.0
+                    elif masks[pi].sum() == 0: # TODO: recover empty masks in future versions (to avoid severe fake completion)
+                        ious[pi] = 1.0
 
                 # confirm occlusions & save masks (for HMR)
                 start, end = (idxs := [ix for ix,x in enumerate(ious) if x < 0.7]) and (idxs[0], idxs[-1]) or (None, None)

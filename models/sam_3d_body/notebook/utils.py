@@ -371,14 +371,16 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                     # print(f"Computed bbox from mask: {bbox[0]}")
                     bbox_list.append(bbox)
                     continue
-
-            zero_mask = np.zeros_like(mask)
-            zero_mask[mask==obj_id] = 255
-            mask_binary = zero_mask.astype(np.uint8)
+            else:
+                zero_mask = np.zeros_like(mask)
+                zero_mask[mask==obj_id] = 255
+                mask_binary = zero_mask.astype(np.uint8)
 
             # mute objects near margin
             H, W = mask_binary.shape
-            mask_binary_cp = mask_binary.copy()
+            zero_mask_cp = np.zeros_like(mask)
+            zero_mask_cp[mask==obj_id] = 255
+            mask_binary_cp = zero_mask_cp.astype(np.uint8)
             mask_binary_cp[:int(H*0.05), :] = mask_binary_cp[-int(H*0.05):, :] = mask_binary_cp[:, :int(W*0.05)] = mask_binary_cp[:, -int(W*0.05):] = 0
             if mask_binary_cp.max() == 0:   # margin objects
                 mask_binary = mask_binary_cp
