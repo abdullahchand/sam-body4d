@@ -328,7 +328,7 @@ def display_results_grid(
     plt.show()
 
 
-def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict):
+def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_inputs_to_smooth):
     """
     Process image with external mask input.
 
@@ -351,6 +351,10 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
         bbox_list = []
         id_current = []
         for obj_id in obj_ids:
+
+            if obj_id not in mhr_inputs_to_smooth:
+                mhr_inputs_to_smooth[obj_id] = []
+
             if obj_id in idx_dict:
                 start, end = idx_dict[obj_id]
                 if i >= start and i < end:
@@ -406,6 +410,6 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
         mask_batch.append(mask_binary)
         bbox_batch.append(bbox)
     
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict)
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_inputs_to_smooth=mhr_inputs_to_smooth)
 
     return outputs, id_batch

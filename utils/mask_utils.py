@@ -103,44 +103,49 @@ def is_skinny_mask(mask, ratio_threshold=1/5):
 
 def bbox_from_mask(mask):
     """
-    Compute the center coordinates, width, and height of the bounding box
-    surrounding the foreground (mask > 0).
+    Compute normalized bounding box for a boolean/binary mask.
+    Returns bbox parameters in range [0, 1].
 
     Args:
-        mask (np.ndarray): Binary mask of shape (H, W), foreground=1, background=0.
+        mask (np.ndarray): Mask of shape (H, W).
+                           True/1 = foreground, False/0 = background.
 
     Returns:
-        tuple or None: (cx, cy, width, height)
-            - cx, cy: center coordinates of the bounding box
-            - width, height: size of the bounding box
-        None: if no foreground pixels exist
+        tuple or None: (cx_norm, cy_norm, width_norm, height_norm)
+            - cx_norm, cy_norm: normalized bbox center
+            - width_norm, height_norm: normalized bbox size
+        None: if no foreground exists
     """
+    H, W = mask.shape[:2]
 
-    # Find coordinates of foreground pixels
+    # Foreground pixel locations
     ys, xs = np.where(mask > 0)
 
-    # If mask has no foreground, return None
     if len(xs) == 0:
         return None
 
-    # Compute bounding box min/max
+    # Bounding box extents
     x_min, x_max = xs.min(), xs.max()
     y_min, y_max = ys.min(), ys.max()
 
-    # Width and height of the bounding box
     width = x_max - x_min + 1
     height = y_max - y_min + 1
 
-    # Compute the center of the bounding box (float for precision)
     cx = x_min + width / 2.0
     cy = y_min + height / 2.0
 
-    return (cx, cy, width, height)
+    # Normalize to [0, 1]
+    return (
+        cx / W,
+        cy / H,
+        width / W,
+        height / H
+    )
 
 
 def are_bboxes_similar(bbox1, bbox2,
-                       size_ratio_thresh=0.2,
-                       center_ratio_thresh=0.5):
+                       size_ratio_thresh=1,
+                       center_ratio_thresh=4):
     """
     Check whether two bboxes are similar.
     Size (width/height) is the primary criterion, center (cx, cy) is secondary.

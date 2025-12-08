@@ -544,6 +544,8 @@ def on_4d_generation(video_path: str):
         rgb_pixels, _, raw_rgb_pixels = load_and_transform_rgbs(OUTPUT_DIR + "/images", resolution=pred_res)
         depth_pixels = rgb_to_depth(rgb_pixels, depth_model)
 
+    mhr_inputs_to_smooth = {}   # each element is a list storing input parameters for mhr_forward
+
     for i in tqdm(range(0, n, batch_size)):
         batch_images = images_list[i:i + batch_size]
         batch_masks  = masks_list[i:i + batch_size]
@@ -605,6 +607,10 @@ def on_4d_generation(video_path: str):
                     if masks[pi].sum() > pred_amodal_masks[pi].sum():
                         ious[pi] = 1.0
                     elif len(obj_track_list)>0 and not are_bboxes_similar(bbox_from_mask(pamc), obj_track_list[-1]):
+                        ious[pi] = 1.0
+                    elif is_super_long_or_wide(pamc, obj_id):
+                        ious[pi] = 1.0
+                    elif is_skinny_mask(pamc):
                         ious[pi] = 1.0
 
                 # confirm occlusions & save masks (for HMR)
@@ -702,7 +708,7 @@ def on_4d_generation(video_path: str):
                     idx_ += 1
 
         # Process with external mask
-        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict)
+        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_inputs_to_smooth)
         
         for image_path, mask_output, id_current in zip(batch_images, mask_outputs, id_batch):
             img = cv2.imread(image_path)

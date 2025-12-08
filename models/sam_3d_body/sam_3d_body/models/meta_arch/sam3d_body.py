@@ -1660,6 +1660,7 @@ class SAM3DBody(BaseModel):
         thresh_wrist_angle=1.4,
         idx_path=None,
         idx_dict=None,
+        mhr_inputs_to_smooth=None, 
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -2115,6 +2116,9 @@ class SAM3DBody(BaseModel):
 
         # Re-run forward
         with torch.no_grad():
+
+            # smooth before generating mesh parameters
+ 
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(
                     global_trans=pose_output["mhr"]["global_rot"] * 0,
