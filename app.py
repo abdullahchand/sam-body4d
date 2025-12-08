@@ -544,7 +544,7 @@ def on_4d_generation(video_path: str):
         rgb_pixels, _, raw_rgb_pixels = load_and_transform_rgbs(OUTPUT_DIR + "/images", resolution=pred_res)
         depth_pixels = rgb_to_depth(rgb_pixels, depth_model)
 
-    mhr_inputs_to_smooth = {}   # each element is a list storing input parameters for mhr_forward
+    mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
 
     for i in tqdm(range(0, n, batch_size)):
         batch_images = images_list[i:i + batch_size]
@@ -557,7 +557,6 @@ def on_4d_generation(video_path: str):
         idx_path = {}
         if len(modal_pixels_list) > 0:
             print("detect occlusions ...")
-            obj_track_dict = {}
             for (modal_pixels, obj_id) in zip(modal_pixels_list, RUNTIME['out_obj_ids']):
                 # detect occlusions for each object
                 # predict amodal masks (amodal segmentation)
@@ -708,7 +707,7 @@ def on_4d_generation(video_path: str):
                     idx_ += 1
 
         # Process with external mask
-        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_inputs_to_smooth)
+        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict)
         
         for image_path, mask_output, id_current in zip(batch_images, mask_outputs, id_batch):
             img = cv2.imread(image_path)

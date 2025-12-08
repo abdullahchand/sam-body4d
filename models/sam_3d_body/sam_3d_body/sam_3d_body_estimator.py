@@ -76,7 +76,7 @@ class SAM3DBodyEstimator:
         id_batch: Optional[List[List[int]]] = None,
         idx_path=None, 
         idx_dict=None,
-        mhr_inputs_to_smooth=None, 
+        mhr_shape_scale_dict=None, 
     ):
         """
         Perform model prediction in top-down format: assuming input is a full image.
@@ -229,7 +229,7 @@ class SAM3DBodyEstimator:
             thresh_wrist_angle=self.thresh_wrist_angle,
             idx_path=idx_path,
             idx_dict=idx_dict,
-            mhr_inputs_to_smooth=mhr_inputs_to_smooth,
+            mhr_shape_scale_dict=mhr_shape_scale_dict,
         )
         if inference_type == "full":
             pose_output, batch_lhand, batch_rhand, _, _ = outputs

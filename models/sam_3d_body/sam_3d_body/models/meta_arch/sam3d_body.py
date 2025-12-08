@@ -29,6 +29,8 @@ from ..modules.transformer import FFN, MLP
 
 from .base_model import BaseModel
 
+from utils import kalman_smooth_mhr_params_multi_human, smooth_scale_shape_local
+
 
 logger = get_pylogger(__name__)
 
@@ -1660,7 +1662,7 @@ class SAM3DBody(BaseModel):
         thresh_wrist_angle=1.4,
         idx_path=None,
         idx_dict=None,
-        mhr_inputs_to_smooth=None, 
+        mhr_shape_scale_dict=None, 
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -2117,8 +2119,67 @@ class SAM3DBody(BaseModel):
         # Re-run forward
         with torch.no_grad():
 
-            # smooth before generating mesh parameters
- 
+            # # # smooth before generating mesh parameters
+            kalman_cfg = {
+                "body_pose": dict(q_pos=5e-4, q_vel=3e-4, r_obs=8e-2),
+                "hand":      dict(q_pos=4e-4, q_vel=4e-4, r_obs=1.2e-1),
+            }
+
+            pose_output["mhr"] = kalman_smooth_mhr_params_multi_human(
+                pose_output["mhr"],
+                num_frames=len(img_list),
+                keys_to_smooth=["body_pose", "hand"],
+                kalman_cfg=kalman_cfg,
+            )
+
+            num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
+            scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
+            shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
+            B, D_scale = scale.shape
+            _, D_shape = shape.shape
+            num_frames = len(img_list)
+            # B = num_frames * num_human
+            # Reshape to (T, N, D) so that we can index by (frame, human)
+            scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
+            shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
+            # For each human id, use its scale/shape from the first frame (t=0)
+            # and assign it to all frames for that human.
+            for hid in range(num_human):
+                # (28,) and (45,), values at t=0 for this human
+                if hid not in mhr_shape_scale_dict:
+                    mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
+                    first_scale = scale_3d[0, hid].clone()
+                    first_shape = shape_3d[0, hid].clone()
+                else:
+                    first_scale, first_shape = mhr_shape_scale_dict[hid]
+                # Broadcast to all time steps for this human
+                scale_3d[:, hid, :] = first_scale
+                shape_3d[:, hid, :] = first_shape
+
+            # Back to original shape: (B, D)
+            pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
+            pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
+
+            # # Smooth global_rot using a local temporal window (sliding average)
+            # # Works well when the person is mostly facing a fixed direction.
+            # global_rot = pose_output["mhr"]["global_rot"]  # shape: (B, 3)
+            # B, D = global_rot.shape
+            # # Reshape to (T, N, 3) so each human is smoothed independently 
+            # rot_3d = global_rot.view(num_frames, num_human, D)  # (T, N, 3)
+            # # Local window size for temporal smoothing (e.g., 7)
+            # window = 7
+            # half = window // 2
+            # rot_smooth = rot_3d.clone()
+            # # Sliding average per human
+            # for h in range(num_human):
+            #     for t in range(num_frames):
+            #         s = max(0, t - half)
+            #         e = min(num_frames, t + half + 1)
+            #         rot_smooth[t, h] = rot_3d[s:e, h].mean(dim=0)
+            # # Back to (B, 3)
+            # pose_output["mhr"]["global_rot"] = rot_smooth.view(B, D)
+
+
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(
                     global_trans=pose_output["mhr"]["global_rot"] * 0,
