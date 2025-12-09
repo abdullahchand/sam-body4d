@@ -2,7 +2,7 @@
 
 # 🏂 SAM-Body4D
 
-[ 📖 [`Paper` (coming soon)]()] [ 🌐 [`Website` (coming soon)](https://seominseok0429.github.io/Upsample-Anything/)] [ 📝 [`BibTeX` (coming soon)](#-citation)]
+[ 📖 [`Paper`](assets/SAM_Body4D.pdf)] [ 🌐 [`Website` (coming soon)](https://seominseok0429.github.io/Upsample-Anything/)] [ 📝 [`BibTeX` (coming soon)](#-citation)]
 
 
 **SAM-Body4D** is a **training-free** method for **temporally consistent** and **robust** 4D human mesh recovery from videos.

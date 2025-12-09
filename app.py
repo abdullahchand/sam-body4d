@@ -159,9 +159,9 @@ def init_runtime(config_path: str = os.path.join(ROOT, "configs", "body4d.yaml")
 # Paths & supported formats
 # ===============================
 
-EXAMPLE_1 = os.path.join(ROOT, "examples", "example1.mp4")
-EXAMPLE_2 = os.path.join(ROOT, "examples", "example2.mp4")
-EXAMPLE_3 = os.path.join(ROOT, "examples", "example3.mp4")
+EXAMPLE_1 = os.path.join(ROOT, "assets", "examples", "example1.mp4")
+EXAMPLE_2 = os.path.join(ROOT, "assets", "examples", "example2.mp4")
+EXAMPLE_3 = os.path.join(ROOT, "assets", "examples", "example3.mp4")
 
 SUPPORTED_EXTS = {".mp4",}
 
