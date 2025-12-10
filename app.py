@@ -549,6 +549,7 @@ def on_4d_generation(video_path: str):
         # Optional, detect occlusions
         idx_dict = {}
         idx_path = {}
+        occ_dict = {}
         if len(modal_pixels_list) > 0:
             print("detect occlusions ...")
             pred_amodal_masks_dict = {}
@@ -619,9 +620,9 @@ def on_4d_generation(video_path: str):
                     if masks[pi].sum() > pred_amodal_masks[pi].sum():
                         ious[pi] = 1.0
                         pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
-                    elif len(obj_ratio_dict)>0 and not are_bboxes_similar(bbox_from_mask(pred_amodal_masks[pi]), obj_ratio_dict[obj_id]):
-                        ious[pi] = 1.0
-                        pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
+                    # elif len(obj_ratio_dict)>0 and not are_bboxes_similar(bbox_from_mask(pred_amodal_masks[pi]), obj_ratio_dict[obj_id]):
+                    #     ious[pi] = 1.0
+                    #     pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                     elif is_super_long_or_wide(pred_amodal_masks[pi], obj_id):
                         ious[pi] = 1.0
                         pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
@@ -636,9 +637,12 @@ def on_4d_generation(video_path: str):
 
                 # confirm occlusions & save masks (for HMR)
                 start, end = (idxs := [ix for ix,x in enumerate(ious) if x < 0.7]) and (idxs[0], idxs[-1]) or (None, None)
+
+                occ_dict[obj_id] = [1 if ix > 0.7 else 0 for ix in ious]
+
                 if start is not None and end is not None:
-                    # start = max(0, start-2)
-                    # end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1]-1, end+2)
+                    start = max(0, start-2)
+                    end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1]-1, end+2)
                     idx_dict[obj_id] = (start, end)
                     completion_path = ''.join(random.choices('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=4))
                     completion_image_path = f'{OUTPUT_DIR}/completion/{completion_path}/images'
@@ -664,7 +668,10 @@ def on_4d_generation(video_path: str):
                 modal_pixels_current = modal_pixels_current[:, start:end]
                 pred_amodal_masks_current = pred_amodal_masks_dict[obj_id][start:end]
                 modal_mask_union = (modal_pixels_current[0, :, 0, :, :].cpu().numpy() > 0).astype('uint8')
-                pred_amodal_masks_current = np.logical_or(pred_amodal_masks_current, modal_mask_union).astype('uint8')
+                try:
+                    pred_amodal_masks_current = np.logical_or(pred_amodal_masks_current, modal_mask_union).astype('uint8')
+                except:
+                    aaa = 1
                 pred_amodal_masks_tensor = torch.from_numpy(np.where(pred_amodal_masks_current == 0, -1, 1)).float().unsqueeze(0).unsqueeze(
                     2).repeat(1, 1, 3, 1, 1)
 
@@ -703,8 +710,12 @@ def on_4d_generation(video_path: str):
                     cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
                     idx_ += 1
 
+        else:
+            for obj_id in RUNTIME['out_obj_ids']:
+                occ_dict[obj_id] = [1] * len(batch_masks)
+
         # Process with external mask
-        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict)
+        mask_outputs, id_batch = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
         
         for image_path, mask_output, id_current in zip(batch_images, mask_outputs, id_batch):
             img = cv2.imread(image_path)

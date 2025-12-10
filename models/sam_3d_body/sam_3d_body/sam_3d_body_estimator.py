@@ -77,6 +77,7 @@ class SAM3DBodyEstimator:
         idx_path=None, 
         idx_dict=None,
         mhr_shape_scale_dict=None, 
+        occ_dict=None, 
     ):
         """
         Perform model prediction in top-down format: assuming input is a full image.
@@ -244,6 +245,7 @@ class SAM3DBodyEstimator:
             idx_dict=idx_dict,
             mhr_shape_scale_dict=mhr_shape_scale_dict,
             id_batch=id_batch,
+            occ_dict=occ_dict
         )
         if inference_type == "full":
             pose_output, batch_lhand, batch_rhand, _, _ = outputs

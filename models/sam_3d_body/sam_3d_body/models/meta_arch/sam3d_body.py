@@ -1664,6 +1664,7 @@ class SAM3DBody(BaseModel):
         idx_dict=None,
         mhr_shape_scale_dict=None, 
         id_batch=None,
+        occ_dict=None,
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -2136,6 +2137,15 @@ class SAM3DBody(BaseModel):
                 # kalman_cfg=kalman_cfg,
             )
 
+            pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+                mhr_dict=pose_output["mhr"],
+                num_frames=len(img_list),
+                frame_obj_ids=id_batch,
+                keys_to_smooth=["body_pose", "hand"],
+                kalman_cfg=None,         # 兼容用，不用也行
+                vis_flags=occ_dict # {obj_id: [0/1,...]}，长度 = num_frames
+            )
+
             # -----------------
             # keep shape & scale same as the first frame
             num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
@@ -2166,16 +2176,13 @@ class SAM3DBody(BaseModel):
 
             # # -----------------
             # # smooth global rot
-            # pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
-            #     mhr_dict=pose_output["mhr"],
-            #     num_frames=len(img_list),
-            #     frame_obj_ids=id_batch,
-            #     key_name="global_rot",
-            #     # alpha_strong=0.1,   # heavy smooth
-            #     # alpha_weak=0.3,     # tiny smooth
-            #     # motion_low=0.05,    # threshold to static
-            #     # motion_high=0.30,   # do not smooth over this
-            # )
+            pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
+                mhr_dict=pose_output["mhr"],
+                num_frames=len(img_list),
+                frame_obj_ids=id_batch,
+                vis_flags=occ_dict,
+                key_name="global_rot",
+            )
 
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(

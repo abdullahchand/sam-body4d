@@ -6,81 +6,210 @@ def ema_smooth_global_rot_per_obj_id_adaptive(
     mhr_dict,
     num_frames,
     frame_obj_ids,
+    keys_to_smooth=None,   # kept for compatibility, not used
     key_name="global_rot",
-    alpha_strong=0.1,
-    alpha_weak=0.3,
-    motion_low=0.05,
-    motion_high=0.30,
+    vis_flags=None,        # dict[obj_id] -> List[0/1], len = num_frames
+    motion_med_th=0.02,    # static segment threshold (median diff)
+    motion_max_th=0.08,    # static segment threshold (max diff)
+    ema_alpha=0.10,        # strong EMA for static segments
     empty_thresh=1e-6,
 ):
-    if key_name not in mhr_dict:
+    """
+    Segment-wise, occlusion-aware smoothing for global_rot, per obj_id.
+
+    vis_flags: dict[int -> List[int]], obj_id starts from 1.
+        vis_flags[obj_id][t] = 1 -> this obj_id is visible (non-occluded) at frame t
+        vis_flags[obj_id][t] = 0 -> this obj_id is occluded / unreliable at frame t
+
+    For each obj_id (1..num_humans), with slot = obj_id - 1:
+      - present_mask[t] = (obj_id in frame_obj_ids[t])
+      - visible_mask[t] = present_mask[t] AND vis_flags[obj_id][t] == 1
+      - occ_mask[t]     = present_mask[t] AND vis_flags[obj_id][t] == 0
+
+    Behavior per obj_id:
+      1) On visible_mask==True frames, split into contiguous "visible segments".
+         For each visible segment:
+             - compute frame-to-frame motion
+             - if segment motion is LOW (median < motion_med_th and max < motion_max_th):
+                   -> STATIC segment: strong EMA inside this segment only
+             - else:
+                   -> DYNAMIC segment: leave raw rotation
+      2) On occ_mask==True frames, split into contiguous "occlusion segments".
+         For each [s,e]:
+             - compute prev_rot as mean of up to 5 nearest visible frames before s
+             - compute next_rot as mean of up to 5 nearest visible frames after e
+             - if both exist: linear interpolation between prev_rot and next_rot
+             - if only one side: extend that side's mean rotation
+             - if none: do nothing
+      3) Additionally, if a human is "always highly dynamic" on visible frames
+         (median or max motion above larger thresholds), we SKIP static EMA
+         but still do occlusion interpolation (since vis_flags already mark 0/1).
+    """
+    if key_name not in mhr_dict or vis_flags is None:
         return mhr_dict
 
-    rot = mhr_dict[key_name]
+    rot = mhr_dict[key_name]  # (B, 3)
     device = rot.device
     B, D = rot.shape
     if D != 3:
         return mhr_dict
 
-    any_key = next(iter(mhr_dict.keys()))
-    B_check = mhr_dict[any_key].shape[0]
-    assert B_check == B
-    assert B % num_frames == 0
+    assert B % num_frames == 0, "B must be divisible by num_frames"
     num_humans = B // num_frames
 
-    assert len(frame_obj_ids) == num_frames
+    rot_np = rot.detach().cpu().numpy()  # (B, 3)
+    frames_all = np.arange(num_frames, dtype=int)
 
-    rot_np = rot.detach().cpu().numpy()
+    # global thresholds for "always moving" humans
+    motion_med_th_large = motion_med_th * 3.0
+    motion_max_th_large = motion_max_th * 3.0
 
-    # stronger adaptive hyper-params
-    alpha_ultra      = 0.03
-    alpha_strong_eff = 0.07
-    alpha_weak_eff   = 0.18
-
-    very_low_motion = 0.02
-    low_motion      = 0.07
-    high_motion     = 0.50  # <<<<<< updated (was 0.25)
+    support_k = 5  # number of nearest visible frames for local averaging
 
     for obj_id in range(1, num_humans + 1):
-        slot = obj_id - 1
+        slot = obj_id - 1  # 0-based slot index
 
-        valid_indices = []
-        for t in range(num_frames):
-            if obj_id in frame_obj_ids[t]:
-                valid_indices.append(t * num_humans + slot)
+        # frames where this obj_id actually appears
+        present_mask = np.array(
+            [obj_id in fids for fids in frame_obj_ids],
+            dtype=bool
+        )  # (T,)
 
-        if len(valid_indices) == 0:
+        if present_mask.sum() <= 1:
             continue
 
-        track = rot_np[valid_indices, :]
-        if np.linalg.norm(track) < empty_thresh:
-            continue
-
-        T_valid = track.shape[0]
-        if T_valid <= 1:
-            continue
-
-        diff = np.linalg.norm(track[1:] - track[:-1], axis=1)
-        motion_level = float(np.median(diff))
-
-        if motion_level < very_low_motion:
-            alpha = alpha_ultra
-        elif motion_level < low_motion:
-            alpha = alpha_strong_eff
-        elif motion_level < high_motion:
-            alpha = alpha_weak_eff
+        # visibility list for this obj_id; if missing, treat as always visible
+        vis_list = vis_flags.get(obj_id, None)
+        if vis_list is None:
+            vis_arr = np.ones(num_frames, dtype=int)
         else:
-            continue  # skip (still too dynamic)
+            vis_arr = np.asarray(vis_list, dtype=int)
+            assert len(vis_arr) == num_frames, "vis_flags[obj_id] length must equal num_frames"
 
-        smooth = np.zeros_like(track, dtype=np.float32)
-        smooth[0] = track[0]
-        for i in range(1, T_valid):
-            smooth[i] = alpha * track[i] + (1.0 - alpha) * smooth[i - 1]
+        visible_mask = (present_mask & (vis_arr == 1))
+        occ_mask     = (present_mask & (vis_arr == 0))
 
-        if not np.isfinite(smooth).all():
+        frames_vis = frames_all[visible_mask]
+        frames_occ = frames_all[occ_mask]
+
+        if len(frames_vis) <= 1:
+            # not enough visible frames to judge or interpolate
             continue
 
-        rot_np[valid_indices, :] = smooth
+        idx_vis = frames_vis * num_humans + slot
+        track_vis = rot_np[idx_vis, :]  # (N_vis, 3)
+
+        if np.linalg.norm(track_vis) < empty_thresh:
+            continue
+
+        # ----- 1) decide if this human is "always moving" on visible frames -----
+        diffs_all = np.linalg.norm(track_vis[1:] - track_vis[:-1], axis=1)  # (N_vis-1,)
+        motion_med_all = float(np.median(diffs_all))
+        motion_max_all = float(np.max(diffs_all))
+
+        always_moving = (
+            motion_med_all >= motion_med_th_large
+            or motion_max_all >= motion_max_th_large
+        )
+
+        # ----- 2) static vs dynamic visible segments (only if not always moving) -----
+        if not always_moving:
+            t = 0
+            while t < num_frames:
+                # find a visible segment where this obj_id is present and visible
+                if not visible_mask[t]:
+                    t += 1
+                    continue
+                s = t
+                while (
+                    t + 1 < num_frames
+                    and visible_mask[t + 1]
+                ):
+                    t += 1
+                e = t  # [s,e] is a contiguous visible segment
+
+                seg_frames = frames_all[s:e + 1]
+                seg_idx = seg_frames * num_humans + slot
+                seg_track = rot_np[seg_idx, :]  # (L, 3)
+                L = seg_track.shape[0]
+
+                if L > 1:
+                    seg_diffs = np.linalg.norm(seg_track[1:] - seg_track[:-1], axis=1)
+                    seg_med = float(np.median(seg_diffs))
+                    seg_max = float(np.max(seg_diffs))
+
+                    # low-motion visible segment -> STATIC: strong EMA
+                    if (seg_med < motion_med_th) and (seg_max < motion_max_th):
+                        smooth = np.zeros_like(seg_track, dtype=np.float32)
+                        smooth[0] = seg_track[0]
+                        for i in range(1, L):
+                            smooth[i] = ema_alpha * seg_track[i] + (1.0 - ema_alpha) * smooth[i - 1]
+                        if np.isfinite(smooth).all():
+                            rot_np[seg_idx, :] = smooth
+                    # else: DYNAMIC visible segment -> keep raw
+
+                t += 1
+
+        # ----- 3) occlusion segments: interpolation / extension with local support -----
+        if len(frames_occ) > 0:
+            t = 0
+            while t < num_frames:
+                if not occ_mask[t]:
+                    t += 1
+                    continue
+                s = t
+                while t + 1 < num_frames and occ_mask[t + 1]:
+                    t += 1
+                e = t  # [s,e] is a contiguous occlusion segment
+
+                # all visible frames for this obj_id
+                frames_vis_current = frames_all[visible_mask]
+
+                # nearest visible frames before s
+                prev_support = frames_vis_current[frames_vis_current < s]
+                # nearest visible frames after e
+                next_support = frames_vis_current[frames_vis_current > e]
+
+                prev_rot = None
+                next_rot = None
+
+                if len(prev_support) > 0:
+                    prev_support = prev_support[-support_k:]  # last K before s
+                    prev_idx = prev_support * num_humans + slot
+                    prev_rot = rot_np[prev_idx].mean(axis=0)
+                if len(next_support) > 0:
+                    next_support = next_support[:support_k]   # first K after e
+                    next_idx = next_support * num_humans + slot
+                    next_rot = rot_np[next_idx].mean(axis=0)
+
+                if prev_rot is None and next_rot is None:
+                    t += 1
+                    continue
+
+                for tt in range(s, e + 1):
+                    if not occ_mask[tt]:
+                        continue
+                    idx = tt * num_humans + slot
+
+                    if prev_rot is not None and next_rot is not None:
+                        # interpolate between local mean before and after
+                        span_start = prev_support[-1]
+                        span_end   = next_support[0]
+                        if span_end > span_start:
+                            r = float(np.clip(tt - span_start, 0, span_end - span_start)) / float(
+                                max(span_end - span_start, 1)
+                            )
+                        else:
+                            r = 0.5
+                        rot_np[idx] = (1.0 - r) * prev_rot + r * next_rot
+                    elif prev_rot is not None:
+                        # only previous support: hold local mean before occlusion
+                        rot_np[idx] = prev_rot
+                    elif next_rot is not None:
+                        # only next support: use local mean after occlusion
+                        rot_np[idx] = next_rot
+
+                t += 1
 
     mhr_dict[key_name] = torch.from_numpy(rot_np).to(device)
     return mhr_dict
@@ -239,89 +368,283 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
     mhr_dict,
     num_frames,
     frame_obj_ids,
-    keys_to_smooth=None,
-    kalman_cfg=None,   # kept for API compatibility, not strictly used here
+    keys_to_smooth=None,     # e.g. ["body_pose", "hand"]
+    kalman_cfg=None,         # kept for compatibility, not used in this EMA version
+    vis_flags=None,          # dict[obj_id] -> List[0/1], len = num_frames
+    motion_med_th=0.02,
+    motion_max_th=0.08,
+    ema_alpha=0.10,
     empty_thresh=1e-6,
 ):
     """
-    Per-obj_id aggressive adaptive smoothing with occlusion awareness.
-
-    - Very strong Kalman for body_pose / hand.
-    - Strong default bias toward heavy even without occlusion.
-    - Occlusion-like patterns (stable -> burst -> stable) are more easily
-      detected and middle segments are almost fully pulled to heavy.
+    Segment-wise, occlusion-aware smoothing for high-dim MHR parameters
+    (typically body_pose and hand), per obj_id.
     """
     if keys_to_smooth is None:
         keys_to_smooth = ["body_pose", "hand"]
 
-    if kalman_cfg is None:
-        kalman_cfg = {}
+    if vis_flags is None:
+        vis_flags = {}
 
-    assert len(frame_obj_ids) == num_frames, "frame_obj_ids length must equal num_frames"
+    any_key = next(iter(mhr_dict.keys()))
+    B_total = mhr_dict[any_key].shape[0]
+    assert B_total % num_frames == 0, "B must be divisible by num_frames"
+    num_humans = B_total // num_frames
+
+    frames_all = np.arange(num_frames, dtype=int)
+
+    # thresholds for "always moving" humans (global gating)
+    motion_med_th_large = motion_med_th * 3.0
+    motion_max_th_large = motion_max_th * 3.0
+
+    support_k = 5                 # local window size for occlusion interpolation
+    diff_per_dim_th = 0.05        # for occlusion: interp vs orig difference
+    spike_factor = 2.0            # for visible segments: detect local spikes
+    alpha_static = ema_alpha      # strong smoothing on static segments
+    alpha_spike = ema_alpha * 0.5 # extra-strong for local spikes in mostly-static segments
+
+    boundary_radius = 2           # how many visible frames on each side to diffuse into
+    boundary_blend = 0.5          # base blend weight at the immediate boundary (distance=0)
 
     new_mhr = {}
 
-    any_key = next(iter(mhr_dict.keys()))
-    B = mhr_dict[any_key].shape[0]
-    assert B % num_frames == 0, "B must be divisible by num_frames"
-    num_humans = B // num_frames
-
     for k, v in mhr_dict.items():
-        if k in keys_to_smooth:
-            device = v.device
-            B, D = v.shape
-            v_np = v.detach().cpu().numpy()  # (B, D)
+        if k not in keys_to_smooth:
+            new_mhr[k] = v
+            continue
 
-            # Aggressive hyper-params per key
-            if k == "body_pose":
-                strong_q_pos, strong_q_vel, strong_r_obs = 1e-7, 1e-8, 10.0
-                motion_low, motion_high = 0.15, 0.50
-                noise_raw_scale = 0.05
-            elif k == "hand":
-                strong_q_pos, strong_q_vel, strong_r_obs = 1e-7, 1e-8, 10.0
-                motion_low, motion_high = 0.20, 0.60
-                noise_raw_scale = 0.05
+        param = v  # tensor (B, D)
+        device = param.device
+        B, D = param.shape
+        assert B == B_total, f"Inconsistent B for key {k}"
+
+        param_np = param.detach().cpu().numpy()  # (B, D)
+
+        for obj_id in range(1, num_humans + 1):
+            slot = obj_id - 1  # 0-based index within each frame
+
+            # frames where this obj_id actually appears
+            present_mask = np.array(
+                [obj_id in fids for fids in frame_obj_ids],
+                dtype=bool
+            )  # (T,)
+
+            if present_mask.sum() <= 1:
+                continue
+
+            # visibility list for this obj_id; if missing, treat as always visible
+            vis_list = vis_flags.get(obj_id, None)
+            if vis_list is None:
+                vis_arr = np.ones(num_frames, dtype=int)
             else:
-                strong_q_pos, strong_q_vel, strong_r_obs = 1e-7, 1e-8, 10.0
-                motion_low, motion_high = 0.15, 0.55
-                noise_raw_scale = 0.05
+                vis_arr = np.asarray(vis_list, dtype=int)
+                assert len(vis_arr) == num_frames, "vis_flags[obj_id] length must equal num_frames"
 
-            # Loop over obj_id = 1..num_humans
-            for obj_id in range(1, num_humans + 1):
-                slot = obj_id - 1  # slot index in [0, num_humans)
+            visible_mask = (present_mask & (vis_arr == 1))
+            occ_mask     = (present_mask & (vis_arr == 0))
 
-                valid_indices = []
-                for t in range(num_frames):
-                    if obj_id in frame_obj_ids[t]:
-                        idx = t * num_humans + slot
-                        valid_indices.append(idx)
+            frames_vis = frames_all[visible_mask]
+            frames_occ = frames_all[occ_mask]
 
-                if len(valid_indices) == 0:
-                    continue
+            if len(frames_vis) <= 1:
+                # not enough visible frames to judge or interpolate
+                continue
 
-                track_valid = v_np[valid_indices, :]  # (T_valid, D)
+            idx_vis = frames_vis * num_humans + slot
+            track_vis = param_np[idx_vis, :]  # (N_vis, D)
 
-                if np.linalg.norm(track_valid) < empty_thresh:
-                    continue
+            if np.linalg.norm(track_vis) < empty_thresh:
+                continue
 
-                smoothed_valid = adaptive_strong_smoothing(
-                    track_valid,
-                    strong_q_pos=strong_q_pos,
-                    strong_q_vel=strong_q_vel,
-                    strong_r_obs=strong_r_obs,
-                    motion_low=motion_low,
-                    motion_high=motion_high,
-                    noise_raw_scale=noise_raw_scale,
-                    min_stable_len=2,
-                )
+            # ----- 1) decide if this (key, obj_id) is "always moving" on visible frames -----
+            diffs_all = np.linalg.norm(track_vis[1:] - track_vis[:-1], axis=1)  # (N_vis-1,)
+            motion_med_all = float(np.median(diffs_all))
+            motion_max_all = float(np.max(diffs_all))
 
-                if not np.isfinite(smoothed_valid).all():
-                    continue
+            always_moving = (
+                motion_med_all >= motion_med_th_large
+                or motion_max_all >= motion_max_th_large
+            )
 
-                v_np[valid_indices, :] = smoothed_valid
+            # ----- 2) visible segments (vis=1) -----
+            if not always_moving:
+                t = 0
+                while t < num_frames:
+                    # find a visible segment where this obj_id is present and visible
+                    if not visible_mask[t]:
+                        t += 1
+                        continue
+                    s = t
+                    while (
+                        t + 1 < num_frames
+                        and visible_mask[t + 1]
+                    ):
+                        t += 1
+                    e = t  # [s,e] is a contiguous visible segment
 
-            new_mhr[k] = torch.from_numpy(v_np).to(device)
-        else:
+                    seg_frames = frames_all[s:e + 1]
+                    seg_idx = seg_frames * num_humans + slot
+                    seg_track = param_np[seg_idx, :]  # (L, D)
+                    L = seg_track.shape[0]
+
+                    if L > 1:
+                        seg_diffs = np.linalg.norm(seg_track[1:] - seg_track[:-1], axis=1)
+                        seg_med = float(np.median(seg_diffs))
+                        seg_max = float(np.max(seg_diffs))
+
+                        if (seg_med < motion_med_th) and (seg_max < motion_max_th):
+                            # fully static segment -> strong EMA on whole segment
+                            smooth = np.zeros_like(seg_track, dtype=np.float32)
+                            smooth[0] = seg_track[0]
+                            for i in range(1, L):
+                                smooth[i] = (
+                                    alpha_static * seg_track[i]
+                                    + (1.0 - alpha_static) * smooth[i - 1]
+                                )
+                            if np.isfinite(smooth).all():
+                                param_np[seg_idx, :] = smooth
+                        else:
+                            # mostly dynamic but may have local spikes: mild spike suppression
+                            smooth = seg_track.copy()
+                            if L > 2:
+                                mean_diff = float(np.mean(seg_diffs))
+                                spike_th = max(spike_factor * mean_diff, motion_max_th)
+                                for i in range(1, L):
+                                    if seg_diffs[i - 1] > spike_th:
+                                        # local spike -> extra-strong EMA only at this step
+                                        smooth[i] = (
+                                            alpha_spike * seg_track[i]
+                                            + (1.0 - alpha_spike) * smooth[i - 1]
+                                        )
+                            if np.isfinite(smooth).all():
+                                param_np[seg_idx, :] = smooth
+
+                    t += 1
+
+            # ----- 3) occlusion segments (vis=0): local support + adaptive blend + boundary diffusion -----
+            if len(frames_occ) > 0:
+                t = 0
+                while t < num_frames:
+                    if not occ_mask[t]:
+                        t += 1
+                        continue
+                    s = t
+                    while t + 1 < num_frames and occ_mask[t + 1]:
+                        t += 1
+                    e = t  # [s,e] is a contiguous occlusion segment
+
+                    # all visible frames for this obj_id and this key
+                    frames_vis_current = frames_all[visible_mask]
+
+                    # nearest visible frames before s
+                    prev_support = frames_vis_current[frames_vis_current < s]
+                    # nearest visible frames after e
+                    next_support = frames_vis_current[frames_vis_current > e]
+
+                    prev_vec = None
+                    next_vec = None
+
+                    if len(prev_support) > 0:
+                        prev_support = prev_support[-support_k:]  # last K before s
+                        prev_idx = prev_support * num_humans + slot
+                        prev_vec = param_np[prev_idx, :].mean(axis=0)
+                    if len(next_support) > 0:
+                        next_support = next_support[:support_k]   # first K after e
+                        next_idx = next_support * num_humans + slot
+                        next_vec = param_np[next_idx, :].mean(axis=0)
+
+                    if prev_vec is None and next_vec is None:
+                        t += 1
+                        continue
+
+                    is_at_start = (s == 0)
+
+                    # fill occluded frames
+                    for tt in range(s, e + 1):
+                        if not occ_mask[tt]:
+                            continue
+                        idx = tt * num_humans + slot
+                        orig = param_np[idx, :].copy()
+
+                        # 1) build interpolated candidate
+                        if (prev_vec is not None) and (next_vec is not None):
+                            span_start = prev_support[-1]
+                            span_end   = next_support[0]
+                            if span_end > span_start:
+                                r = float(np.clip(tt - span_start, 0, span_end - span_start)) / float(
+                                    max(span_end - span_start, 1)
+                                )
+                            else:
+                                r = 0.5
+                            interp_vec = (1.0 - r) * prev_vec + r * next_vec
+                        elif prev_vec is not None:
+                            interp_vec = prev_vec
+                        else:
+                            interp_vec = next_vec
+
+                        # 2) distance between interp and original
+                        diff_norm = float(np.linalg.norm(interp_vec - orig) / max(D, 1))
+
+                        # 3) adaptive weight
+                        if diff_norm < diff_per_dim_th:
+                            w = 0.9     # very similar -> strong smoothing
+                        elif diff_norm < 2 * diff_per_dim_th:
+                            w = 0.65    # moderate difference
+                        else:
+                            w = 0.35    # large difference -> protect original more
+
+                        # 4) if occlusion starts at beginning and only next side exists -> weaker
+                        if is_at_start and (prev_vec is None) and (next_vec is not None):
+                            w = min(w, 0.3)
+
+                        # 5) final blend
+                        param_np[idx, :] = w * interp_vec + (1.0 - w) * orig
+
+                    # ----- boundary diffusion: blend several visible frames around the interface -----
+                    # left side (before s)
+                    if len(prev_support) > 0:
+                        edge_occ_idx = s * num_humans + slot
+                        edge_val = param_np[edge_occ_idx, :].copy()
+                        center_frame = prev_support[-1]  # nearest visible before s
+                        for d in range(boundary_radius + 1):
+                            f = center_frame - d
+                            if f < 0:
+                                break
+                            if not visible_mask[f]:
+                                continue
+                            idx_vis_f = f * num_humans + slot
+                            orig_vis = param_np[idx_vis_f, :].copy()
+                            # distance-based weight decay
+                            w_b = boundary_blend * max(0.0, 1.0 - d / (boundary_radius + 1))
+                            if w_b <= 0.0:
+                                continue
+                            param_np[idx_vis_f, :] = w_b * edge_val + (1.0 - w_b) * orig_vis
+
+                    # right side (after e)
+                    if len(next_support) > 0:
+                        edge_occ_idx = e * num_humans + slot
+                        edge_val = param_np[edge_occ_idx, :].copy()
+                        center_frame = next_support[0]  # nearest visible after e
+                        for d in range(boundary_radius + 1):
+                            f = center_frame + d
+                            if f >= num_frames:
+                                break
+                            if not visible_mask[f]:
+                                continue
+                            idx_vis_f = f * num_humans + slot
+                            orig_vis = param_np[idx_vis_f, :].copy()
+                            w_b = boundary_blend * max(0.0, 1.0 - d / (boundary_radius + 1))
+                            if w_b <= 0.0:
+                                continue
+                            param_np[idx_vis_f, :] = w_b * edge_val + (1.0 - w_b) * orig_vis
+
+                    t += 1
+
+        new_mhr[k] = torch.from_numpy(param_np).to(device)
+
+    # pass-through for other keys
+    for k, v in mhr_dict.items():
+        if k not in new_mhr:
             new_mhr[k] = v
 
     return new_mhr
