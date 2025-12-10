@@ -3,11 +3,10 @@ import os
 ROOT = os.path.dirname(__file__)
 os.environ["GRADIO_TEMP_DIR"] = os.path.join(ROOT, "gradio_tmp")
 
+import time
 import cv2
 import gradio as gr
 from PIL import Image
-import yaml
-from types import SimpleNamespace
 import numpy as np
 import torch.nn.functional as F
 
@@ -21,7 +20,6 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, 'models', 'sam_3d_body'))
 sys.path.append(os.path.join(current_dir, 'models', 'diffusion_vas'))
 
-# import sam3
 from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, are_bboxes_similar, resize_mask_with_unique_label
 
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
@@ -478,7 +476,7 @@ def on_mask_generation(video_path: str):
         img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx:08d}.jpg"))
         msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx:08d}.png"))
 
-    out_video_path = os.path.join(OUTPUT_DIR, 'video_mask.mp4')
+    out_video_path = os.path.join(OUTPUT_DIR, f"video_mask_{time.time():.0f}.mp4")
     images_to_mp4(img_to_video, out_video_path, fps=RUNTIME['video_fps'])
 
     return out_video_path
@@ -731,9 +729,10 @@ def on_4d_generation(video_path: str):
                     rend_img.astype(np.uint8),
                 )
 
-    jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", f"{OUTPUT_DIR}/4d.mp4", fps=RUNTIME['video_fps'])
+    out_4d_path = os.path.join(OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
+    jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", out_4d_path, fps=RUNTIME['video_fps'])
 
-    return f"{OUTPUT_DIR}/4d.mp4"
+    return out_4d_path
 
 
 # ===============================

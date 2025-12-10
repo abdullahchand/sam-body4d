@@ -371,14 +371,15 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
     keys_to_smooth=None,     # e.g. ["body_pose", "hand"]
     kalman_cfg=None,         # kept for compatibility, not used in this EMA version
     vis_flags=None,          # dict[obj_id] -> List[0/1], len = num_frames
-    motion_med_th=0.02,
-    motion_max_th=0.08,
-    ema_alpha=0.10,
+    motion_med_th=0.08,
+    motion_max_th=0.25,
+    ema_alpha=0.18,
     empty_thresh=1e-6,
 ):
     """
     Segment-wise, occlusion-aware smoothing for high-dim MHR parameters
     (typically body_pose and hand), per obj_id.
+    Overall: relatively loose smoothing, mainly suppresses jitter and spikes.
     """
     if keys_to_smooth is None:
         keys_to_smooth = ["body_pose", "hand"]
@@ -397,14 +398,16 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
     motion_med_th_large = motion_med_th * 3.0
     motion_max_th_large = motion_max_th * 3.0
 
-    support_k = 5                 # local window size for occlusion interpolation
-    diff_per_dim_th = 0.05        # for occlusion: interp vs orig difference
-    spike_factor = 2.0            # for visible segments: detect local spikes
-    alpha_static = ema_alpha      # strong smoothing on static segments
-    alpha_spike = ema_alpha * 0.5 # extra-strong for local spikes in mostly-static segments
+    support_k = 5                  # local window size for occlusion interpolation
+    diff_per_dim_th = 0.05         # for occlusion: interp vs orig difference
+    spike_factor = 2.2             # for visible segments: detect local spikes
+    alpha_static = ema_alpha       # static segments EMA (looser)
+    alpha_spike = ema_alpha * 0.5  # local spikes EMA
 
-    boundary_radius = 2           # how many visible frames on each side to diffuse into
-    boundary_blend = 0.5          # base blend weight at the immediate boundary (distance=0)
+    # boundary diffusion: loose & soft
+    boundary_radius = 2            # visible frames on each side
+    boundary_blend = 0.45          # blend weight at immediate boundary
+    boundary_decay = 0.5           # per-frame decay for boundary smoothing
 
     new_mhr = {}
 
@@ -475,10 +478,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                         t += 1
                         continue
                     s = t
-                    while (
-                        t + 1 < num_frames
-                        and visible_mask[t + 1]
-                    ):
+                    while t + 1 < num_frames and visible_mask[t + 1]:
                         t += 1
                     e = t  # [s,e] is a contiguous visible segment
 
@@ -493,7 +493,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                         seg_max = float(np.max(seg_diffs))
 
                         if (seg_med < motion_med_th) and (seg_max < motion_max_th):
-                            # fully static segment -> strong EMA on whole segment
+                            # mostly static segment -> loose EMA
                             smooth = np.zeros_like(seg_track, dtype=np.float32)
                             smooth[0] = seg_track[0]
                             for i in range(1, L):
@@ -504,14 +504,13 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                             if np.isfinite(smooth).all():
                                 param_np[seg_idx, :] = smooth
                         else:
-                            # mostly dynamic but may have local spikes: mild spike suppression
+                            # dynamic segment -> only suppress clear spikes
                             smooth = seg_track.copy()
                             if L > 2:
                                 mean_diff = float(np.mean(seg_diffs))
                                 spike_th = max(spike_factor * mean_diff, motion_max_th)
                                 for i in range(1, L):
                                     if seg_diffs[i - 1] > spike_th:
-                                        # local spike -> extra-strong EMA only at this step
                                         smooth[i] = (
                                             alpha_spike * seg_track[i]
                                             + (1.0 - alpha_spike) * smooth[i - 1]
@@ -521,7 +520,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
 
                     t += 1
 
-            # ----- 3) occlusion segments (vis=0): local support + adaptive blend + boundary diffusion -----
+            # ----- 3) occlusion segments (vis=0): local support + adaptive blend + loose boundary diffusion -----
             if len(frames_occ) > 0:
                 t = 0
                 while t < num_frames:
@@ -585,22 +584,22 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                         # 2) distance between interp and original
                         diff_norm = float(np.linalg.norm(interp_vec - orig) / max(D, 1))
 
-                        # 3) adaptive weight
+                        # 3) adaptive weight（整体更松）
                         if diff_norm < diff_per_dim_th:
-                            w = 0.9     # very similar -> strong smoothing
+                            w = 0.82    # similar -> strong but不极端
                         elif diff_norm < 2 * diff_per_dim_th:
                             w = 0.65    # moderate difference
                         else:
-                            w = 0.35    # large difference -> protect original more
+                            w = 0.45    # large difference -> 原值占比较大
 
-                        # 4) if occlusion starts at beginning and only next side exists -> weaker
+                        # 4) if occlusion starts at beginning and only next side exists -> even weaker
                         if is_at_start and (prev_vec is None) and (next_vec is not None):
-                            w = min(w, 0.3)
+                            w = min(w, 0.35)
 
                         # 5) final blend
                         param_np[idx, :] = w * interp_vec + (1.0 - w) * orig
 
-                    # ----- boundary diffusion: blend several visible frames around the interface -----
+                    # ----- loose boundary diffusion: visible frames around interface -----
                     # left side (before s)
                     if len(prev_support) > 0:
                         edge_occ_idx = s * num_humans + slot
@@ -614,8 +613,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                                 continue
                             idx_vis_f = f * num_humans + slot
                             orig_vis = param_np[idx_vis_f, :].copy()
-                            # distance-based weight decay
-                            w_b = boundary_blend * max(0.0, 1.0 - d / (boundary_radius + 1))
+                            w_b = boundary_blend * (boundary_decay ** d)
                             if w_b <= 0.0:
                                 continue
                             param_np[idx_vis_f, :] = w_b * edge_val + (1.0 - w_b) * orig_vis
@@ -633,7 +631,7 @@ def kalman_smooth_mhr_params_per_obj_id_adaptive(
                                 continue
                             idx_vis_f = f * num_humans + slot
                             orig_vis = param_np[idx_vis_f, :].copy()
-                            w_b = boundary_blend * max(0.0, 1.0 - d / (boundary_radius + 1))
+                            w_b = boundary_blend * (boundary_decay ** d)
                             if w_b <= 0.0:
                                 continue
                             param_np[idx_vis_f, :] = w_b * edge_val + (1.0 - w_b) * orig_vis
