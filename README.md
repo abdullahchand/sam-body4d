@@ -29,6 +29,13 @@ By leveraging **pixel-level human continuity** from promptable video segmentatio
 https://github.com/user-attachments/assets/07e49405-e471-40a0-b491-593d97a95465
 
 
+## 📊 Resource & Profiling Summary
+
+For detailed GPU/CPU resource usage, peak memory statistics, and runtime profiling, please refer to:
+
+👉 **[resources.md](assets/doc/resources.md)**  
+
+
 ## 🖥️ Installation
 
 #### 1. Create and Activate Environment

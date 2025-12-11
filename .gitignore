@@ -7,3 +7,4 @@ body4d.yaml
 save_masks.py
 save_video.py
 img_vid_concat.py
+build/

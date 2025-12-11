@@ -20,7 +20,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, 'models', 'sam_3d_body'))
 sys.path.append(os.path.join(current_dir, 'models', 'diffusion_vas'))
 
-from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, are_bboxes_similar, resize_mask_with_unique_label
+from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, gpu_profile, resize_mask_with_unique_label
 
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask
@@ -733,6 +733,10 @@ def on_4d_generation(video_path: str):
     jpg_folder_to_mp4(f"{OUTPUT_DIR}/mask_4d", out_4d_path, fps=RUNTIME['video_fps'])
 
     return out_4d_path
+
+
+on_mask_generation = gpu_profile(on_mask_generation)
+on_4d_generation   = gpu_profile(on_4d_generation)
 
 
 # ===============================
