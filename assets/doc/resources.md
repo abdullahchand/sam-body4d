@@ -13,7 +13,7 @@ CPU RAM usage is small relative to the available **120 GB** and is not a limitin
 
 ## 💡 Recommendation
 
-If your video does **not** contain severe or long-term occlusions, set: `completion.enable = false` in [`configs/body4d.yaml`](configs/body4d.yaml). This disables the occlusion-aware diffusion refinement module and can **significantly improve inference speed** with minimal impact on reconstruction quality.
+If your video does **not** contain severe or long-term occlusions, set: `completion.enable = false` in [`configs/body4d.yaml`](../../configs/body4d.yaml). This disables the occlusion-aware diffusion refinement module and can **significantly improve inference speed** with minimal impact on reconstruction quality.
 
 ---
 
@@ -22,8 +22,8 @@ If your video does **not** contain severe or long-term occlusions, set: `complet
 - **Example ID** — One of the three built-in Gradio demo videos.  
 - **#Targets** — Number of humans selected for reconstruction.  
 - **#Frames** — Total number of frames in the input video.  
-- **Occl?** — Whether occlusion-aware refinement is enabled (**🟢 Yes / 🔴 No**) set: `completion.enable` in [`configs/body4d.yaml`](configs/body4d.yaml).  
-- **Batch Size** — Number of frames processed simultaneously during 4D reconstruction. set: `sam_3d_body.batch_size` in [`configs/body4d.yaml`](configs/body4d.yaml). 
+- **Occl?** — Whether occlusion-aware refinement is enabled (**🟢 Yes / 🔴 No**) set: `completion.enable` in [`configs/body4d.yaml`](../../configs/body4d.yaml).  
+- **Batch Size** — Number of frames processed simultaneously during 4D reconstruction. set: `sam_3d_body.batch_size` in [`configs/body4d.yaml`](../../configs/body4d.yaml). 
 - **Masklets Peak** — Peak GPU memory during masklet generation (SAM-3 propagation).  
 - **Masklets Time** — Runtime for masklet generation.  
 - **4D Peak** — Peak GPU memory during 4D human mesh reconstruction.  
