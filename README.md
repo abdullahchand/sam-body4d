@@ -22,6 +22,11 @@ By leveraging **pixel-level human continuity** from promptable video segmentatio
 <img src="./assets/demo2.gif" width="99%"/>
 </div>
 
+- **Robust 4D reconstruction under camera motion**
+<div align=center>
+<img src="./assets/demo3.gif" width="99%"/>
+</div>
+
 <!-- Training-Free 4D Human Mesh Recovery from Videos, based on [SAM-3](https://github.com/facebookresearch/sam3), [Diffusion-VAS](https://github.com/Kaihua-Chen/diffusion-vas), and [SAM-3D-Body](https://github.com/facebookresearch/sam-3d-body). -->
 
 ## 🕹️ Gradio Demo
