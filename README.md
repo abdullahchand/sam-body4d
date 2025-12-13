@@ -65,7 +65,7 @@ pip install -e .
 
 ## 🚀 Run the Demo
 
-### 1. Setup checkpoints & config (recommended)
+#### 1. Setup checkpoints & config (recommended)
 
 We provide an automated setup script that:
 - generates `configs/body4d.yaml` from a release template,
@@ -83,11 +83,11 @@ Then run the setup script:
 ```bash
 python scripts/setup.py --ckpt-root /path/to/checkpoints
 ```
-### 2. Run
+#### 2. Run
 ```bash
 python app.py
 ```
-### Manual checkpoint setup (optional)
+#### Manual checkpoint setup (optional)
 
 If you prefer to download checkpoints manually ([SAM 3](https://huggingface.co/facebook/sam3), [SAM 3D Body](https://huggingface.co/facebook/sam-3d-body-dinov3), [MoGe-2](https://huggingface.co/Ruicheng/moge-2-vitl-normal), [Diffusion-VAS](https://github.com/Kaihua-Chen/diffusion-vas?tab=readme-ov-file#download-checkpoints), [Depth-Anything V2](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true)), please place them under the directory
 specified by `paths.ckpt_root` with the following structure:
