@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 import argparse
 import getpass
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -118,7 +118,7 @@ def download_url_atomic(url: str, out_path: Path, name: str) -> None:
 def generate_config_from_template(template_path: Path, out_path: Path, ckpt_root: Path, force: bool) -> None:
     ensure_dir(out_path.parent)
     if out_path.exists() and not force:
-        print("[SKIP] Generated config exists (use --force to overwrite).")
+        print("[SKIP] Generated config exists (use --no-force to keep it).")
         return
 
     txt = template_path.read_text(encoding="utf-8")
@@ -234,6 +234,7 @@ def print_manual_hints(ckpt_root: Path) -> None:
     print(f"  CKPT_ROOT = {ckpt_root}")
     print("  sam3/sam3.pt")
     print("  sam-3d-body-dinov3/model.ckpt")
+    print("  sam-3d-body-dinov3/model_config.yaml")
     print("  sam-3d-body-dinov3/assets/mhr_model.pt")
     print("  diffusion-vas-amodal-segmentation/  (directory)")
     print("  diffusion-vas-content-completion/  (directory)")
@@ -292,6 +293,13 @@ def build_specs() -> tuple[list[URLFile], list[HFRepoDir], list[HFFile]]:
             gated=True,
         ),
         HFFile(
+            name="SAM-3D-Body (model_config.yaml)",
+            repo_id="facebook/sam-3d-body-dinov3",
+            filename="model_config.yaml",
+            rel_out="sam-3d-body-dinov3/model_config.yaml",
+            gated=True,
+        ),
+        HFFile(
             name="SAM-3D-Body (mhr_model.pt)",
             repo_id="facebook/sam-3d-body-dinov3",
             filename="assets/mhr_model.pt",
@@ -311,7 +319,9 @@ def main() -> None:
     ap.add_argument("--ckpt-root", type=str, default=None, help="Checkpoint root (default: ./checkpoints)")
     ap.add_argument("--owner-repo", type=str, default=DEFAULT_OWNER_REPO, help="GitHub owner/repo for Releases")
     ap.add_argument("--release-tag", type=str, default=DEFAULT_RELEASE_TAG, help="Release tag (e.g., v0.1.0)")
-    ap.add_argument("--force", action="store_true", help="Overwrite generated configs/body4d.yaml")
+    ap.add_argument("--no-force", dest="force", action="store_false",
+                    help="Do not overwrite generated configs/body4d.yaml")
+    ap.set_defaults(force=True)
     ap.add_argument("--prompt-hf-token", action="store_true", help="Prompt HF token during run if needed")
     args = ap.parse_args()
 
@@ -324,7 +334,7 @@ def main() -> None:
     local_tmpl = repo_root / "configs" / TEMPLATE_ASSET_NAME
     download_url_atomic(tmpl_url, local_tmpl, "Config template (release)")
 
-    # 2) Generate configs/body4d.yaml
+    # 2) Generate configs/body4d.yaml (force by default)
     out_cfg = repo_root / GENERATED_CONFIG_PATH
     generate_config_from_template(local_tmpl, out_cfg, ckpt_root, force=args.force)
 
@@ -332,12 +342,16 @@ def main() -> None:
     url_files, repo_dirs, hf_files = build_specs()
 
     # 3.1 URL files (atomic)
+    ok = True
     for it in url_files:
-        download_url_atomic(it.url, ckpt_root / it.rel_out, it.name)
+        try:
+            download_url_atomic(it.url, ckpt_root / it.rel_out, it.name)
+        except Exception as e:
+            ok = False
+            print(f"[BLOCKED] {it.name}: download failed ({e})")
 
     # 3.2 Non-gated HF downloads (token optional)
     token_cached = get_cached_hf_token()
-    ok = True
 
     for it in repo_dirs:
         ok &= hf_download_repo_dir(it, ckpt_root, token_cached)
