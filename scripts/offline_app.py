@@ -424,43 +424,43 @@ class offline_app:
                 for obj_id in self.RUNTIME['out_obj_ids']:
                     occ_dict[obj_id] = [1] * len(batch_masks)
 
-        # Process with external mask
-        mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
-        
-        num_empth_ids = 0
-        for frame_id in range(len(batch_images)):
-            image_path = batch_images[frame_id]
-            if frame_id in empty_frame_list:
-                mask_output = None
-                id_current = None
-                num_empth_ids += 1
-            else:
-                mask_output = mask_outputs[frame_id-num_empth_ids]
-                id_current = id_batch[frame_id-num_empth_ids]
-            img = cv2.imread(image_path)
-            rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-            cv2.imwrite(
-                f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                rend_img.astype(np.uint8),
-            )
-            # save rendered frames for individual person
-            rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-            for ri, rend_img in enumerate(rend_img_list):
+            # Process with external mask
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
+            
+            num_empth_ids = 0
+            for frame_id in range(len(batch_images)):
+                image_path = batch_images[frame_id]
+                if frame_id in empty_frame_list:
+                    mask_output = None
+                    id_current = None
+                    num_empth_ids += 1
+                else:
+                    mask_output = mask_outputs[frame_id-num_empth_ids]
+                    id_current = id_batch[frame_id-num_empth_ids]
+                img = cv2.imread(image_path)
+                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
                 cv2.imwrite(
-                    f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
                     rend_img.astype(np.uint8),
                 )
-            # save mesh for individual person
-            save_mesh_results(
-                outputs=mask_output, 
-                faces=self.sam3_3d_body_model.faces, 
-                save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
-                image_path=image_path,
-                id_current=id_current,
-            )
-            
-            np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
-            np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)
+                # save rendered frames for individual person
+                rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                for ri, rend_img in enumerate(rend_img_list):
+                    cv2.imwrite(
+                        f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                        rend_img.astype(np.uint8),
+                    )
+                # save mesh for individual person
+                save_mesh_results(
+                    outputs=mask_output, 
+                    faces=self.sam3_3d_body_model.faces, 
+                    save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
+                    image_path=image_path,
+                    id_current=id_current,
+                )
+                
+                np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
+                np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)
 
         out_4d_path = os.path.join(self.OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
         # jpg_folder_to_mp4(f"{self.OUTPUT_DIR}/rendered_frames", out_4d_path)

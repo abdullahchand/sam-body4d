@@ -19,7 +19,7 @@ def inference(args):
     test_seq_name_list = [os.path.splitext(os.path.basename(tn))[0] for tn in test_seq_name_list]
     bboxes = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_bbx_xyxy_uint16.pt'))
 
-    batch_size = 200
+    batch_size = 1000
 
     # inference
     for seq in tqdm(test_seq_name_list):
