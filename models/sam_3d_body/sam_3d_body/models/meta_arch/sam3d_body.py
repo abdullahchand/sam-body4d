@@ -2129,21 +2129,21 @@ class SAM3DBody(BaseModel):
 
             # -----------------
             # smooth body pose & hand
-            pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
-                pose_output["mhr"],
-                num_frames=len(img_list),
-                frame_obj_ids=id_batch,
-                keys_to_smooth=["body_pose", "hand"],
-                # kalman_cfg=kalman_cfg,
-            )
+            # pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+            #     pose_output["mhr"],
+            #     num_frames=len(img_list),
+            #     frame_obj_ids=id_batch,
+            #     keys_to_smooth=["body_pose", "hand"],
+            #     # kalman_cfg=kalman_cfg,
+            # )
 
             pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
                 mhr_dict=pose_output["mhr"],
                 num_frames=len(img_list),
                 frame_obj_ids=id_batch,
                 keys_to_smooth=["body_pose", "hand"],
-                kalman_cfg=None,         # 兼容用，不用也行
-                vis_flags=occ_dict # {obj_id: [0/1,...]}，长度 = num_frames
+                kalman_cfg=None,
+                vis_flags=occ_dict
             )
 
             # -----------------

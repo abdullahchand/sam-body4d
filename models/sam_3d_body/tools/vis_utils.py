@@ -16,6 +16,9 @@ def visualize_sample(img_cv2, outputs, faces, id_current):
 	img_mesh = img_cv2.copy()
 	img_mesh = np.ones_like(img_mesh) * 255
 
+	if outputs is None:
+		return img_mesh
+
 	rend_img = []
 	for pid, person_output in enumerate(outputs):
 		renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
@@ -39,6 +42,9 @@ def visualize_sample_together(img_cv2, outputs, faces, id_current):
 	# Render everything together
 	img_mesh = img_cv2.copy()
 	img_mesh = np.ones_like(img_mesh) * 255
+
+	if outputs is None:
+		return img_mesh
 
 	# First, sort by depth, furthest to closest
 	try:

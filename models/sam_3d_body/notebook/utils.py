@@ -218,6 +218,10 @@ def save_mesh_results(
     id_current: List,
 ):
     """Save 3D mesh results to files and return PLY file paths"""
+
+    if outputs is None:
+        return
+
     for pid, person_output in enumerate(outputs):
         # Create renderer for this person
         renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
@@ -291,6 +295,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
     mask_batch = []
     n = len(image_path)
     id_batch = []
+    empty_frame_list = []
     for i in range(n):
         # Load mask
         mask = np.array(Image.open(mask_path[i]).convert('P'))
@@ -350,6 +355,10 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             # print(f"Computed bbox from mask: {bbox[0]}")
             bbox_list.append(bbox)
 
+        if len(bbox_list) == 0:
+            empty_frame_list.append(i)
+            continue
+
         id_batch.append(id_current)
         bbox = np.stack(bbox_list, axis=0)  # TODO: sometimes empty
         mask_binary = np.stack(mask_list, axis=0)
@@ -359,6 +368,11 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
         mask_batch.append(mask_binary)
         bbox_batch.append(bbox)
     
+    if len(empty_frame_list) > 0:
+        for occ_k, occ_v in occ_dict.items():
+            for i in sorted(empty_frame_list, reverse=True):
+                occ_v.pop(i)
+
     outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict)
 
-    return outputs, id_batch
+    return outputs, id_batch, empty_frame_list
