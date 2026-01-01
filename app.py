@@ -518,6 +518,7 @@ def on_4d_generation(video_path: str):
     os.makedirs(f"{OUTPUT_DIR}/rendered_frames", exist_ok=True)
     for obj_id in RUNTIME['out_obj_ids']:
         os.makedirs(f"{OUTPUT_DIR}/mesh_4d_individual/{obj_id}", exist_ok=True)
+        os.makedirs(f"{OUTPUT_DIR}/focal_4d_individual/{obj_id}", exist_ok=True)
         os.makedirs(f"{OUTPUT_DIR}/rendered_frames_individual/{obj_id}", exist_ok=True)
         # if RUNTIME['smpl_export']:
         #     os.makedirs(f"{OUTPUT_DIR}/smpl_individual/{obj_id}", exist_ok=True)
@@ -740,10 +741,10 @@ def on_4d_generation(video_path: str):
                 outputs=mask_output, 
                 faces=sam3_3d_body_model.faces, 
                 save_dir=f"{OUTPUT_DIR}/mesh_4d_individual",
+                focal_dir = f"{OUTPUT_DIR}/focal_4d_individual",
                 image_path=image_path,
                 id_current=id_current,
             )
-
 
     out_4d_path = os.path.join(OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
     jpg_folder_to_mp4(f"{OUTPUT_DIR}/rendered_frames", out_4d_path, fps=RUNTIME['video_fps'])

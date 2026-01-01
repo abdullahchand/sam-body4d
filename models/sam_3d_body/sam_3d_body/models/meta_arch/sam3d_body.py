@@ -1060,7 +1060,7 @@ class SAM3DBody(BaseModel):
             batch["img"].dtype
         )  # This is B x num_person x 2 x H x W
 
-    def forward_pose_branch(self, batch: Dict) -> Dict:
+    def forward_pose_branch(self, batch: Dict, kps_batch = None) -> Dict:
         """Run a forward pass for the crop-image (pose) branch."""
         batch_size, num_person = batch["img"].shape[:2]
 
@@ -1121,8 +1121,43 @@ class SAM3DBody(BaseModel):
         condition_info = self._get_decoder_condition(batch)
 
         # Initial estimate with a dummy prompt
-        keypoints_prompt = torch.zeros((batch_size * num_person, 1, 3)).to(batch["img"])
-        keypoints_prompt[:, :, -1] = -2
+
+        if kps_batch is None or len(kps_batch) == 0:
+            keypoints_prompt = torch.zeros((batch_size * num_person, 1, 3)).to(batch["img"])
+            keypoints_prompt[:, :, -1] = -2
+        else:   # for 3dpw evaluation (kp from preprocessed data)
+            Height = batch['ori_img_size'][0,0][0].item()
+            Width = batch['ori_img_size'][0,0][1].item()
+            keypoints_prompt = np.stack(kps_batch, axis=0)                          # (N, M, 17, 3)
+            keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])  # torch.Size([N, M, 17, 3])
+            keypoints_prompt = keypoints_prompt.reshape(-1, 17, 3)
+            # keypoints_prompt = keypoints_prompt / torch.tensor([Height, Width, 1.0], device=keypoints_prompt.device, dtype=keypoints_prompt.dtype)
+            # Remove negative values by shifting each channel
+            # If a channel has values < 0, subtract its minimum so that the new minimum becomes 0
+            min_per_channel = keypoints_prompt.amin(
+                dim=tuple(range(keypoints_prompt.ndim - 1)),
+                keepdim=True
+            )
+            # Only shift channels whose minimum is below 0
+            shift = torch.clamp(min_per_channel, max=0.0)
+            keypoints_prompt = keypoints_prompt - shift
+            # Original normalization by physical scale
+            # Typically: x / Width, y / Height, confidence unchanged
+            keypoints_prompt = keypoints_prompt / torch.tensor(
+                [Height, Width, 1.0],
+                device=keypoints_prompt.device,
+                dtype=keypoints_prompt.dtype
+            )
+            # Safety normalization
+            # If any channel is still > 1 after normalization,
+            # divide that channel by its maximum value
+            max_per_channel = keypoints_prompt.amax(
+                dim=tuple(range(keypoints_prompt.ndim - 1)),
+                keepdim=True
+            )
+            # Channels with max <= 1 remain unchanged
+            scale = torch.clamp(max_per_channel, min=1.0)
+            keypoints_prompt = keypoints_prompt / scale
 
         # Forward promptable decoder to get updated pose tokens and regression output
         pose_output, pose_output_hand = None, None
@@ -1182,7 +1217,7 @@ class SAM3DBody(BaseModel):
         return output
 
     def forward_step(
-        self, batch: Dict, decoder_type: str = "body"
+        self, batch: Dict, decoder_type: str = "body", kps_batch = None
     ) -> Tuple[Dict, Dict]:
         batch_size, num_person = batch["img"].shape[:2]
 
@@ -1196,7 +1231,7 @@ class SAM3DBody(BaseModel):
             ValueError("Invalid decoder type: ", decoder_type)
 
         # Crop-image (pose) branch
-        pose_output = self.forward_pose_branch(batch)
+        pose_output = self.forward_pose_branch(batch, kps_batch=kps_batch)
 
         return pose_output
 
@@ -1665,6 +1700,7 @@ class SAM3DBody(BaseModel):
         mhr_shape_scale_dict=None, 
         id_batch=None,
         occ_dict=None,
+        kps_batch=None,
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -1688,7 +1724,7 @@ class SAM3DBody(BaseModel):
             ValueError("Invalid inference type: ", inference_type)
 
         # Step 1. For full-body inference, we first inference with the body decoder.
-        pose_output = self.forward_step(batch, decoder_type="body")
+        pose_output = self.forward_step(batch, decoder_type="body", kps_batch=kps_batch)
         left_xyxy, right_xyxy = self._get_hand_box(pose_output, batch)
         ori_local_wrist_rotmat = roma.euler_to_rotmat(
             "XZY",

@@ -25,7 +25,7 @@ def prepare_batch(
     # construct batch data samples
     data_list = []
     for idx in range(boxes.shape[0]):
-        if idx in img_com_dict:
+        if (img_com_dict is not None) and idx in img_com_dict:
             data_info = dict(img=img_com_dict[idx])    
         else:
             data_info = dict(img=img)

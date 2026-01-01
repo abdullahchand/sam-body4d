@@ -9,6 +9,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import json
 
 from sam_3d_body import load_sam_3d_body_hf, SAM3DBodyEstimator
 from sam_3d_body.metadata.mhr70 import pose_info as mhr70_pose_info
@@ -214,6 +215,7 @@ def save_mesh_results(
     outputs: List[Dict[str, Any]],
     faces: np.ndarray,
     save_dir: str,
+    focal_dir: str, 
     image_path: str,
     id_current: List,
 ):
@@ -233,6 +235,10 @@ def save_mesh_results(
         )
         mesh_path = f"{save_dir}/{pid+1}/{os.path.basename(image_path)[:-4]}.ply"
         tmesh.export(mesh_path)
+
+        focal_length = {'focal_length': person_output["focal_length"].item(), 'camera': [float(x) for x in person_output['pred_cam_t']]}
+        with open(f"{focal_dir}/{pid+1}/{os.path.basename(image_path)[:-4]}.json", "w") as f:
+            json.dump(focal_length, f, indent=4)
 
 
 def display_results_grid(
@@ -373,6 +379,60 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict)
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True)
+
+    return outputs, id_batch, empty_frame_list
+
+
+def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None):
+    """
+    Process image with external mask input.
+
+    Note: The refactored code requires bboxes to be provided along with masks.
+    This function automatically computes bboxes from the mask.
+    """
+    # load in batches
+    image_batch = []
+    bbox_batch = []
+    kps_batch = []
+    n = len(image_path)
+    id_batch = []
+    empty_frame_list = []
+    obj_ids = [oi+1 for oi in range(len(bboxes))]
+    for i in range(n):
+        bbox_list = []
+        kp_list = []
+        id_current = []
+        
+        for obj_id in obj_ids:
+            id_current.append(obj_id)
+            # Get bounding box from mask contours
+            x, y, x2, y2 = bboxes[obj_id-1][i][0].item(), bboxes[obj_id-1][i][1].item(), bboxes[obj_id-1][i][2].item(), bboxes[obj_id-1][i][3].item()
+            bbox = np.array([[x, y, x2, y2]], dtype=np.float32)
+            # print(f"Computed bbox from mask: {bbox[0]}")
+            bbox_list.append(bbox)
+            if batch_kps is not None:
+                kp_list.append(batch_kps[obj_id-1][i])  # N x 3
+
+        if len(bbox_list) == 0:
+            empty_frame_list.append(i)
+            continue
+
+        id_batch.append(id_current)
+        bbox = np.stack(bbox_list, axis=0)  # TODO: sometimes empty
+        if batch_kps is not None:
+            kps_batch.append(np.stack(kp_list, axis=0))
+        # mask_binary = np.stack(mask_list, axis=0)
+        # Process with external mask and computed bbox
+        # Note: The mask needs to match the number of bboxes (1 bbox -> 1 mask)
+        image_batch.append(image_path[i])
+        bbox_batch.append(bbox)
+    
+    if len(empty_frame_list) > 0:
+        for occ_k, occ_v in occ_dict.items():
+            for i in sorted(empty_frame_list, reverse=True):
+                occ_v.pop(i)
+
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch)   # use_mask=False default
 
     return outputs, id_batch, empty_frame_list
