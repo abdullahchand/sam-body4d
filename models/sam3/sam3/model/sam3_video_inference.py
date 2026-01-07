@@ -57,6 +57,7 @@ class Sam3VideoInference(Sam3VideoBase):
         offload_video_to_cpu=False,
         async_loading_frames=False,
         video_loader_type="cv2",
+        batch_size=None,
     ):
         """Initialize an inference state from `resource_path` (an image or a video)."""
         images, orig_height, orig_width = load_resource_as_video_frames(
@@ -67,6 +68,7 @@ class Sam3VideoInference(Sam3VideoBase):
             img_std=self.image_std,
             async_loading_frames=async_loading_frames,
             video_loader_type=video_loader_type,
+            batch_size=batch_size,
         )
         inference_state = {}
         inference_state["image_size"] = self.image_size

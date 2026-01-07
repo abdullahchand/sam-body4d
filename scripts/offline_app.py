@@ -181,7 +181,13 @@ class OfflineApp:
         os.makedirs(MASKS_PATH, exist_ok=True)
 
         for out_frame_idx in range(0, len(video_segments), vis_frame_stride):
-            img = self.RUNTIME['inference_state']['images'][out_frame_idx].detach().float().cpu()
+            images = self.RUNTIME['inference_state']['input_batch'].img_batch
+            # Handle both tensor and batch loader
+            img = images[out_frame_idx]
+            if isinstance(img, torch.Tensor):
+                img = img.detach().float().cpu()
+            else:
+                img = img.float().cpu()
             img = (img + 1) / 2
             img = img.clamp(0, 1)
             img = F.interpolate(
@@ -500,7 +506,13 @@ def inference(args):
             if len(outputs) > 0:
                 break
         
-        inference_state = predictor.predictor.init_state(video_path=args.input_video)
+        frame_batch_size = predictor.CONFIG.video_loading.get('frame_batch_size', None)
+        offload_to_cpu = predictor.CONFIG.video_loading.get('offload_to_cpu', False)
+        inference_state = predictor.predictor.init_state(
+            video_path=args.input_video,
+            offload_video_to_cpu=offload_to_cpu,
+            batch_size=frame_batch_size,
+        )
         predictor.predictor.clear_all_points_in_video(inference_state)
         predictor.RUNTIME['inference_state'] = inference_state
         predictor.RUNTIME['out_obj_ids'] = []
@@ -531,7 +543,13 @@ def inference(args):
                 break
             starting_frame_idx += 1
 
-        inference_state = predictor.predictor.init_state(video_path=image_list)
+        frame_batch_size = predictor.CONFIG.video_loading.get('frame_batch_size', None)
+        offload_to_cpu = predictor.CONFIG.video_loading.get('offload_to_cpu', False)
+        inference_state = predictor.predictor.init_state(
+            video_path=image_list,
+            offload_video_to_cpu=offload_to_cpu,
+            batch_size=frame_batch_size,
+        )
         predictor.predictor.clear_all_points_in_video(inference_state)
         predictor.RUNTIME['inference_state'] = inference_state
         predictor.RUNTIME['out_obj_ids'] = []

@@ -24,6 +24,11 @@ sam_3d_body:
   detector_path: ""
   segmentor_path: ""
 
+video_loading:
+  # Frame loading configuration
+  frame_batch_size: 32  # Number of frames to load at once (set to None or 0 to load all frames)
+  offload_to_cpu: false  # Whether to offload frames to CPU instead of GPU
+
 runtime:
   output_dir: ./outputs
 

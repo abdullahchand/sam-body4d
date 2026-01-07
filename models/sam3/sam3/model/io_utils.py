@@ -34,10 +34,14 @@ def load_resource_as_video_frames(
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
     video_loader_type="cv2",
+    batch_size=None,
 ):
     """
     Load video frames from either a video or an image (as a single-frame video).
     Alternatively, if input is a list of PIL images, convert its format
+    
+    Args:
+        batch_size: If provided and > 0, frames will be loaded in batches instead of all at once.
     """
     if isinstance(resource_path, list):
         img_mean = torch.tensor(img_mean, dtype=torch.float16)[:, None, None]
@@ -87,6 +91,7 @@ def load_resource_as_video_frames(
             img_std=img_std,
             async_loading_frames=async_loading_frames,
             video_loader_type=video_loader_type,
+            batch_size=batch_size,
         )
 
 
@@ -121,10 +126,14 @@ def load_video_frames(
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
     video_loader_type="cv2",
+    batch_size=None,
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
     the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
+    
+    Args:
+        batch_size: If provided and > 0, frames will be loaded in batches instead of all at once.
     """
     assert isinstance(video_path, str)
     if video_path.startswith("<load-dummy-video"):
@@ -150,6 +159,7 @@ def load_video_frames(
             img_std=img_std,
             async_loading_frames=async_loading_frames,
             video_loader_type=video_loader_type,
+            batch_size=batch_size,
         )
     else:
         raise NotImplementedError("Only video files and image folders are supported")
@@ -220,6 +230,7 @@ def load_video_frames_from_video_file(
     gpu_acceleration=False,
     gpu_device=None,
     video_loader_type="cv2",
+    batch_size=None,
 ):
     """Load the video frames from a video file."""
     if video_loader_type == "cv2":
@@ -229,6 +240,7 @@ def load_video_frames_from_video_file(
             img_mean=img_mean,
             img_std=img_std,
             offload_video_to_cpu=offload_video_to_cpu,
+            batch_size=batch_size,
         )
     elif video_loader_type == "torchcodec":
         logger.info("Using torchcodec to load video file")
@@ -252,12 +264,132 @@ def load_video_frames_from_video_file(
         raise RuntimeError("video_loader_type must be either 'cv2' or 'torchcodec'")
 
 
+class BatchVideoFrameLoader:
+    """
+    A lazy loader that loads video frames in batches on-demand instead of loading all frames at once.
+    This helps reduce memory usage for long videos.
+    """
+    
+    def __init__(
+        self,
+        video_path: str,
+        image_size: int,
+        img_mean: tuple = (0.5, 0.5, 0.5),
+        img_std: tuple = (0.5, 0.5, 0.5),
+        offload_video_to_cpu: bool = False,
+        batch_size: int = 32,
+    ):
+        import cv2  # delay OpenCV import to avoid unnecessary dependency
+        
+        self.video_path = video_path
+        self.image_size = image_size
+        self.offload_video_to_cpu = offload_video_to_cpu
+        self.batch_size = batch_size
+        
+        # Convert mean and std to tensors
+        self.img_mean = torch.tensor(img_mean, dtype=torch.float16).view(1, 3, 1, 1)
+        self.img_std = torch.tensor(img_std, dtype=torch.float16).view(1, 3, 1, 1)
+        if not offload_video_to_cpu:
+            self.img_mean = self.img_mean.cuda()
+            self.img_std = self.img_std.cuda()
+        
+        # Get video metadata
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {video_path}")
+        
+        self.original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if self.num_frames <= 0:
+            # Count frames manually if metadata is unreliable
+            self.num_frames = 0
+            while True:
+                ret, _ = cap.read()
+                if not ret:
+                    break
+                self.num_frames += 1
+            cap.release()
+            cap = cv2.VideoCapture(video_path)
+        cap.release()
+        
+        # Cache for loaded frames
+        self._frame_cache = {}
+        self._cv2 = cv2
+    
+    def __len__(self):
+        return self.num_frames
+    
+    def __getitem__(self, index):
+        """Get a frame by index, loading it in a batch if not already cached."""
+        if index < 0:
+            index += self.num_frames
+        if index < 0 or index >= self.num_frames:
+            raise IndexError(f"Frame index {index} out of range [0, {self.num_frames})")
+        
+        # Return cached frame if available
+        if index in self._frame_cache:
+            return self._frame_cache[index]
+        
+        # Load a batch of frames around the requested index
+        batch_start = (index // self.batch_size) * self.batch_size
+        batch_end = min(batch_start + self.batch_size, self.num_frames)
+        
+        # Load the batch
+        cap = self._cv2.VideoCapture(self.video_path)
+        cap.set(self._cv2.CAP_PROP_POS_FRAMES, batch_start)
+        
+        for i in range(batch_start, batch_end):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Convert BGR to RGB and resize
+            frame_rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
+            frame_resized = self._cv2.resize(
+                frame_rgb, (self.image_size, self.image_size), interpolation=self._cv2.INTER_CUBIC
+            )
+            
+            # Convert to tensor (matching original cv2 loading behavior)
+            frame_np = frame_resized.astype(np.float32)  # (H, W, C), values in [0, 255]
+            frame_tensor = torch.from_numpy(frame_np).permute(2, 0, 1)  # (C, H, W)
+            frame_tensor = frame_tensor.to(dtype=torch.float16)
+            
+            # Normalize by mean and std (matching original cv2 loading)
+            frame_tensor = frame_tensor.unsqueeze(0)  # (1, C, H, W)
+            frame_tensor -= self.img_mean
+            frame_tensor /= self.img_std
+            frame_tensor = frame_tensor.squeeze(0)  # (C, H, W)
+            
+            if not self.offload_video_to_cpu:
+                frame_tensor = frame_tensor.cuda()
+            
+            self._frame_cache[i] = frame_tensor
+        
+        cap.release()
+        
+        # Return the requested frame
+        if index not in self._frame_cache:
+            raise RuntimeError(f"Failed to load frame {index}")
+        
+        return self._frame_cache[index]
+    
+    @property
+    def video_height(self):
+        return self.original_height
+    
+    @property
+    def video_width(self):
+        return self.original_width
+
+
 def load_video_frames_from_video_file_using_cv2(
     video_path: str,
     image_size: int,
     img_mean: tuple = (0.5, 0.5, 0.5),
     img_std: tuple = (0.5, 0.5, 0.5),
     offload_video_to_cpu: bool = False,
+    batch_size: int = None,
 ) -> torch.Tensor:
     """
     Load video from path, convert to normalized tensor with specified preprocessing
@@ -267,12 +399,28 @@ def load_video_frames_from_video_file_using_cv2(
         image_size: Target size for square frames (height and width)
         img_mean: Normalization mean (RGB)
         img_std: Normalization standard deviation (RGB)
+        offload_video_to_cpu: Whether to keep frames on CPU
+        batch_size: If provided, use batch loading instead of loading all frames at once
 
     Returns:
-        torch.Tensor: Preprocessed video tensor in shape (T, C, H, W) with float16 dtype
+        torch.Tensor or BatchVideoFrameLoader: Preprocessed video tensor in shape (T, C, H, W) with float16 dtype,
+        or a BatchVideoFrameLoader if batch_size is provided
     """
     import cv2  # delay OpenCV import to avoid unnecessary dependency
 
+    # If batch_size is provided, use batch loading
+    if batch_size is not None and batch_size > 0:
+        loader = BatchVideoFrameLoader(
+            video_path=video_path,
+            image_size=image_size,
+            img_mean=img_mean,
+            img_std=img_std,
+            offload_video_to_cpu=offload_video_to_cpu,
+            batch_size=batch_size,
+        )
+        return loader, loader.video_height, loader.video_width
+
+    # Original behavior: load all frames at once
     # Initialize video capture
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
