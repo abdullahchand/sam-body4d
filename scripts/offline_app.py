@@ -181,13 +181,25 @@ class OfflineApp:
         os.makedirs(MASKS_PATH, exist_ok=True)
 
         for out_frame_idx in range(0, len(video_segments), vis_frame_stride):
-            images = self.RUNTIME['inference_state']['input_batch'].img_batch
+            # Handle both Sam3VideoInference (input_batch) and Sam3TrackerPredictor (images)
+            inference_state = self.RUNTIME['inference_state']
+            if 'input_batch' in inference_state:
+                images = inference_state['input_batch'].img_batch
+            elif 'images' in inference_state:
+                images = inference_state['images']
+            else:
+                raise KeyError("Could not find images in inference_state. Expected 'input_batch' or 'images'")
+            
             # Handle both tensor and batch loader
             img = images[out_frame_idx]
             if isinstance(img, torch.Tensor):
                 img = img.detach().float().cpu()
             else:
                 img = img.float().cpu()
+            
+            # Denormalize: images are normalized with mean=0.5, std=0.5, so we need to reverse that
+            # Original normalization: (img - 0.5) / 0.5, which maps [0, 1] -> [-1, 1]
+            # Reverse: (img + 1) / 2, which maps [-1, 1] -> [0, 1]
             img = (img + 1) / 2
             img = img.clamp(0, 1)
             img = F.interpolate(
