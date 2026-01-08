@@ -63,6 +63,7 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
         async_loading_frames=False,
+        batch_size=None,
     ):
         """Initialize a inference state."""
         inference_state = {}
@@ -87,6 +88,7 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
                 offload_video_to_cpu=offload_video_to_cpu,
                 async_loading_frames=async_loading_frames,
                 compute_device=inference_state["storage_device"],
+                batch_size=batch_size,
             )
             inference_state["images"] = images
             inference_state["num_frames"] = len(images)

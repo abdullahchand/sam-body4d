@@ -101,10 +101,14 @@ def load_video_frames(
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    batch_size=None,
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
     the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
+    
+    Args:
+        batch_size: If provided and > 0, frames will be loaded in batches instead of all at once.
     """
     is_bytes = isinstance(video_path, bytes)
     is_str = isinstance(video_path, str)
@@ -117,6 +121,7 @@ def load_video_frames(
             img_mean=img_mean,
             img_std=img_std,
             compute_device=compute_device,
+            batch_size=batch_size,
         )
     elif is_str and os.path.isdir(video_path):
         return load_video_frames_from_jpg_images(
@@ -270,8 +275,13 @@ def load_video_frames_from_video_file(
     img_mean=(0.5, 0.5, 0.5),
     img_std=(0.5, 0.5, 0.5),
     compute_device=torch.device("cuda"),
+    batch_size=None,
 ):
-    """Load the video frames from a video file."""
+    """Load the video frames from a video file.
+    
+    Note: batch_size parameter is currently not supported for decord-based loading.
+    All frames will be loaded at once.
+    """
     import decord
 
     img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
