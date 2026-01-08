@@ -44,3 +44,7 @@ completion:
 
   depth_encoder: vitl
   max_occ_len: 25
+  # Memory management options
+  enable_cpu_offload: false  # Enable CPU offloading for diffusion models to save GPU memory
+  clear_gpu_cache: true  # Clear GPU cache before running diffusion pipeline
+  decode_chunk_size: 8  # Smaller values use less memory but may be slower

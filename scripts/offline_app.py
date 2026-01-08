@@ -117,11 +117,18 @@ def build_diffusion_vas_config(cfg):
     depth_encoder = cfg.completion['depth_encoder']
     model_path_depth = cfg.completion['model_path_depth']
     max_occ_len = min(cfg.completion['max_occ_len'], cfg.sam_3d_body['batch_size'])
+    enable_cpu_offload = cfg.completion.get('enable_cpu_offload', False)
 
     generator = torch.manual_seed(23)
 
     pipeline_mask = init_amodal_segmentation_model(model_path_mask)
+    if enable_cpu_offload:
+        pipeline_mask.enable_model_cpu_offload()
+        print("Enabled CPU offloading for pipeline_mask to save GPU memory")
+    
     pipeline_rgb = init_rgb_model(model_path_rgb)
+    # pipeline_rgb already has CPU offload enabled in init_rgb_model
+    
     depth_model = init_depth_model(model_path_depth, depth_encoder)
 
     return pipeline_mask, pipeline_rgb, depth_model, max_occ_len, generator
@@ -300,23 +307,53 @@ class OfflineApp:
             if len(modal_pixels_list) > 0:
                 print("detect occlusions ...")
                 pred_amodal_masks_dict = {}
+                
+                # Memory management: clear GPU cache if enabled
+                if self.CONFIG.completion.get('clear_gpu_cache', True):
+                    torch.cuda.empty_cache()
+                
+                decode_chunk_size = self.CONFIG.completion.get('decode_chunk_size', 8)
+                
                 for (modal_pixels, obj_id) in zip(modal_pixels_list, self.RUNTIME['out_obj_ids']):
+                    # Clear GPU cache before processing each object to free up memory
+                    if self.CONFIG.completion.get('clear_gpu_cache', True):
+                        torch.cuda.empty_cache()
+                    
                     # detect occlusions for each object
                     # predict amodal masks (amodal segmentation)
-                    pred_amodal_masks = self.pipeline_mask(
-                        modal_pixels[:, i:i + batch_size, :, :, :],
-                        depth_pixels[:, i:i + batch_size, :, :, :],
-                        height=pred_res[0],
-                        width=pred_res[1],
-                        num_frames=modal_pixels[:, i:i + batch_size, :, :, :].shape[1],
-                        decode_chunk_size=8,
-                        motion_bucket_id=127,
-                        fps=8,
-                        noise_aug_strength=0.02,
-                        min_guidance_scale=1.5,
-                        max_guidance_scale=1.5,
-                        generator=self.generator,
-                    ).frames[0]
+                    try:
+                        pred_amodal_masks = self.pipeline_mask(
+                            modal_pixels[:, i:i + batch_size, :, :, :],
+                            depth_pixels[:, i:i + batch_size, :, :, :],
+                            height=pred_res[0],
+                            width=pred_res[1],
+                            num_frames=modal_pixels[:, i:i + batch_size, :, :, :].shape[1],
+                            decode_chunk_size=decode_chunk_size,
+                            motion_bucket_id=127,
+                            fps=8,
+                            noise_aug_strength=0.02,
+                            min_guidance_scale=1.5,
+                            max_guidance_scale=1.5,
+                            generator=self.generator,
+                        ).frames[0]
+                    except torch.cuda.OutOfMemoryError as e:
+                        print(f"GPU out of memory for object {obj_id}. Trying with smaller decode_chunk_size...")
+                        torch.cuda.empty_cache()
+                        # Retry with smaller chunk size
+                        pred_amodal_masks = self.pipeline_mask(
+                            modal_pixels[:, i:i + batch_size, :, :, :],
+                            depth_pixels[:, i:i + batch_size, :, :, :],
+                            height=pred_res[0],
+                            width=pred_res[1],
+                            num_frames=modal_pixels[:, i:i + batch_size, :, :, :].shape[1],
+                            decode_chunk_size=max(1, decode_chunk_size // 2),  # Reduce chunk size
+                            motion_bucket_id=127,
+                            fps=8,
+                            noise_aug_strength=0.02,
+                            min_guidance_scale=1.5,
+                            max_guidance_scale=1.5,
+                            generator=self.generator,
+                        ).frames[0]
 
                     # for completion
                     pred_amodal_masks_com = [np.array(img.resize((pred_res_hi[1], pred_res_hi[0]))) for img in pred_amodal_masks]
