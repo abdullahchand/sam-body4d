@@ -508,18 +508,51 @@ class OfflineApp:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
                 img = cv2.imread(image_path)
-                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                cv2.imwrite(
-                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                    rend_img.astype(np.uint8),
-                )
+                
+                # Check if rendering is enabled
+                enable_rendering = self.CONFIG.runtime.get('enable_rendering', True)
+                skip_on_error = self.CONFIG.runtime.get('skip_rendering_on_error', True)
+                
+                if enable_rendering:
+                    try:
+                        rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                        cv2.imwrite(
+                            f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                            rend_img.astype(np.uint8),
+                        )
 
-                # save rendered frames for individual person
-                rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                for ri, rend_img in enumerate(rend_img_list):
+                        # save rendered frames for individual person
+                        rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                        for ri, rend_img in enumerate(rend_img_list):
+                            cv2.imwrite(
+                                f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                                rend_img.astype(np.uint8),
+                            )
+                    except Exception as e:
+                        if skip_on_error:
+                            print(f"Warning: Rendering failed for frame {frame_id}: {e}")
+                            print("Saving original image instead of rendered version.")
+                            # Save original image as fallback
+                            cv2.imwrite(
+                                f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                                img,
+                            )
+                            # Save original for individual frames too
+                            cv2.imwrite(
+                                f"{self.OUTPUT_DIR}/rendered_frames_individual/1/{os.path.basename(image_path)[:-4]}_1.jpg",
+                                img,
+                            )
+                        else:
+                            raise
+                else:
+                    # Rendering disabled, just save original images
                     cv2.imwrite(
-                        f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
-                        rend_img.astype(np.uint8),
+                        f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                        img,
+                    )
+                    cv2.imwrite(
+                        f"{self.OUTPUT_DIR}/rendered_frames_individual/1/{os.path.basename(image_path)[:-4]}_1.jpg",
+                        img,
                     )
                 # save mesh for individual person
                 save_mesh_results(
