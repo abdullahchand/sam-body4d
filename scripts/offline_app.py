@@ -111,6 +111,92 @@ def build_sam3_3d_body_config(cfg):
     return estimator
 
 
+def smooth_camera_parameters(outputs_list, id_batch_list, smoothing_factor=0.5):
+    """
+    Apply temporal smoothing to camera parameters across frames to prevent floating.
+    Tracks persons by their ID across frames and smooths their camera parameters.
+    
+    Args:
+        outputs_list: List of lists, where each inner list contains dicts with camera params per person
+        id_batch_list: List of lists, where each inner list contains person IDs for that frame
+        smoothing_factor: Strength of smoothing (0.0 = no smoothing, 1.0 = maximum smoothing)
+    
+    Returns:
+        Smoothed outputs_list with modified pred_cam_t and focal_length
+    """
+    if len(outputs_list) == 0:
+        return outputs_list
+    
+    # Create a copy to avoid modifying original
+    smoothed_outputs = []
+    for frame_outputs in outputs_list:
+        smoothed_outputs.append([out.copy() for out in frame_outputs])
+    
+    num_frames = len(smoothed_outputs)
+    if num_frames < 2:
+        return smoothed_outputs
+    
+    # Track camera parameters per person ID across frames
+    # person_id -> list of (frame_idx, person_idx_in_frame, pred_cam_t, focal_length)
+    person_tracks = {}  # person_id -> list of tuples
+    
+    # Collect all camera parameters, tracking by person ID
+    for frame_idx, (frame_outputs, frame_ids) in enumerate(zip(smoothed_outputs, id_batch_list)):
+        for person_idx_in_frame, person_id in enumerate(frame_ids):
+            if person_id not in person_tracks:
+                person_tracks[person_id] = []
+            
+            person_output = frame_outputs[person_idx_in_frame]
+            pred_cam_t = person_output.get('pred_cam_t', np.zeros(3))
+            focal_length = person_output.get('focal_length', 5000.0)
+            
+            person_tracks[person_id].append((
+                frame_idx,
+                person_idx_in_frame,
+                pred_cam_t.copy(),
+                focal_length
+            ))
+    
+    # Apply smoothing for each person track
+    for person_id, track in person_tracks.items():
+        if len(track) < 2:
+            continue  # Need at least 2 frames to smooth
+        
+        # Sort by frame_idx to ensure correct order
+        track.sort(key=lambda x: x[0])
+        
+        # Extract camera parameters
+        cam_t_list = [t[2] for t in track]
+        focal_list = [t[3] for t in track]
+        
+        # Convert to numpy arrays
+        cam_t_array = np.array(cam_t_list)
+        focal_array = np.array(focal_list)
+        
+        # Apply exponential moving average (bidirectional)
+        smoothed_cam_t = cam_t_array.copy()
+        smoothed_focal = focal_array.copy()
+        
+        # Forward pass
+        for i in range(1, len(track)):
+            alpha = smoothing_factor
+            smoothed_cam_t[i] = (1 - alpha) * smoothed_cam_t[i] + alpha * smoothed_cam_t[i-1]
+            smoothed_focal[i] = (1 - alpha) * smoothed_focal[i] + alpha * smoothed_focal[i-1]
+        
+        # Backward pass for bidirectional smoothing
+        for i in range(len(track) - 2, -1, -1):
+            alpha = smoothing_factor
+            smoothed_cam_t[i] = (1 - alpha) * smoothed_cam_t[i] + alpha * smoothed_cam_t[i+1]
+            smoothed_focal[i] = (1 - alpha) * smoothed_focal[i] + alpha * smoothed_focal[i+1]
+        
+        # Apply smoothed values back to outputs
+        for track_idx, (frame_idx, person_idx_in_frame, _, _) in enumerate(track):
+            smoothed_outputs[frame_idx][person_idx_in_frame]['pred_cam_t'] = smoothed_cam_t[track_idx]
+            smoothed_outputs[frame_idx][person_idx_in_frame]['focal_length'] = smoothed_focal[track_idx]
+    
+    return smoothed_outputs
+
+
 def build_diffusion_vas_config(cfg):
     model_path_mask = cfg.completion['model_path_mask']
     model_path_rgb = cfg.completion['model_path_rgb']
@@ -294,7 +380,21 @@ class OfflineApp:
         mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
         obj_ratio_dict = {}         # avoid fake completion by obj ratio on the first frame
 
-        for i in tqdm(range(0, n, batch_size)):
+        # Get camera smoothing config
+        camera_smoothing_factor = self.CONFIG.runtime.get('camera_smoothing_factor', 0.5)
+        enable_camera_smoothing = self.CONFIG.runtime.get('enable_camera_smoothing', True)
+        
+        # Accumulate all outputs for smoothing across batches
+        all_mask_outputs = []  # List of lists: [batch][frame][person]
+        all_id_batches = []    # List of lists: [batch][frame][person_ids]
+        all_empty_frame_lists = []  # List of lists: [batch][empty_frame_indices]
+        all_batch_images_list = []  # List of lists: [batch][image_paths]
+        all_batch_masks_list = []   # List of lists: [batch][mask_paths]
+        all_idx_paths = []          # List of dicts: [batch][obj_id] -> paths
+        all_idx_dicts = []          # List of dicts: [batch][obj_id] -> (start, end)
+
+        # First pass: Process all batches and accumulate outputs
+        for i in tqdm(range(0, n, batch_size), desc="Processing frames"):
             batch_images = images_list[i:i + batch_size]
             batch_masks  = masks_list[i:i + batch_size]
 
@@ -497,6 +597,55 @@ class OfflineApp:
             # Process with external mask
             mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
             
+            # Accumulate outputs for smoothing
+            all_mask_outputs.append(mask_outputs)
+            all_id_batches.append(id_batch)
+            all_empty_frame_lists.append(empty_frame_list)
+            all_batch_images_list.append(batch_images)
+            all_batch_masks_list.append(batch_masks)
+            all_idx_paths.append(idx_path)
+            all_idx_dicts.append(idx_dict)
+        
+        # Flatten accumulated outputs across all batches
+        flattened_mask_outputs = []
+        flattened_id_batches = []
+        frame_to_batch_map = []  # Map global frame index to batch index and local frame index
+        
+        global_frame_idx = 0
+        for batch_idx, (batch_outputs, batch_ids, empty_frames) in enumerate(zip(all_mask_outputs, all_id_batches, all_empty_frame_lists)):
+            batch_images = all_batch_images_list[batch_idx]
+            for local_frame_idx in range(len(batch_images)):
+                if local_frame_idx in empty_frames:
+                    # Skip empty frames in accumulation
+                    continue
+                # Calculate the index in mask_outputs (accounting for empty frames before this one)
+                num_empty_before = sum(1 for ef in empty_frames if ef < local_frame_idx)
+                output_idx = local_frame_idx - num_empty_before
+                if output_idx < len(batch_outputs):
+                    flattened_mask_outputs.append(batch_outputs[output_idx])
+                    flattened_id_batches.append(batch_ids[output_idx])
+                    frame_to_batch_map.append((batch_idx, local_frame_idx))
+                    global_frame_idx += 1
+        
+        # Apply camera smoothing if enabled
+        if enable_camera_smoothing and len(flattened_mask_outputs) > 1:
+            print(f"Applying camera smoothing (factor={camera_smoothing_factor})...")
+            flattened_mask_outputs = smooth_camera_parameters(
+                flattened_mask_outputs, 
+                flattened_id_batches, 
+                smoothing_factor=camera_smoothing_factor
+            )
+            print("Camera smoothing completed.")
+        
+        # Second pass: Render using smoothed outputs
+        global_output_idx = 0
+        for batch_idx in tqdm(range(len(all_batch_images_list)), desc="Rendering frames"):
+            batch_images = all_batch_images_list[batch_idx]
+            batch_masks = all_batch_masks_list[batch_idx]
+            empty_frame_list = all_empty_frame_lists[batch_idx]
+            idx_path = all_idx_paths[batch_idx]
+            idx_dict = all_idx_dicts[batch_idx]
+            
             num_empth_ids = 0
             for frame_id in range(len(batch_images)):
                 image_path = batch_images[frame_id]
@@ -505,8 +654,21 @@ class OfflineApp:
                     id_current = None
                     num_empth_ids += 1
                 else:
-                    mask_output = mask_outputs[frame_id-num_empth_ids]
-                    id_current = id_batch[frame_id-num_empth_ids]
+                    # Use smoothed outputs
+                    if global_output_idx < len(flattened_mask_outputs):
+                        mask_output = flattened_mask_outputs[global_output_idx]
+                        id_current = flattened_id_batches[global_output_idx]
+                        global_output_idx += 1
+                    else:
+                        # Fallback to original processing if smoothing didn't work
+                        num_empty_before = sum(1 for ef in empty_frame_list if ef < frame_id)
+                        output_idx = frame_id - num_empty_before
+                        if output_idx < len(all_mask_outputs[batch_idx]):
+                            mask_output = all_mask_outputs[batch_idx][output_idx]
+                            id_current = all_id_batches[batch_idx][output_idx]
+                        else:
+                            mask_output = None
+                            id_current = None
                 img = cv2.imread(image_path)
                 
                 # Check if rendering is enabled
