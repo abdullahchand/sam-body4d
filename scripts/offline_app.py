@@ -142,7 +142,23 @@ def smooth_camera_parameters(outputs_list, id_batch_list, smoothing_factor=0.5):
     
     # Collect all camera parameters, tracking by person ID
     for frame_idx, (frame_outputs, frame_ids) in enumerate(zip(smoothed_outputs, id_batch_list)):
-        for person_idx_in_frame, person_id in enumerate(frame_ids):
+        # Match IDs to outputs - they should correspond by index, but handle mismatches
+        num_outputs = len(frame_outputs)
+        num_ids = len(frame_ids)
+        
+        if num_outputs != num_ids:
+            print(f"Warning: Frame {frame_idx} has {num_outputs} outputs but {num_ids} IDs. Using minimum.")
+        
+        # Use the minimum to avoid index errors
+        num_people = min(num_outputs, num_ids)
+        
+        for person_idx_in_frame in range(num_people):
+            # Double-check bounds (shouldn't be needed but safety first)
+            if person_idx_in_frame >= len(frame_ids) or person_idx_in_frame >= len(frame_outputs):
+                break
+            
+            person_id = frame_ids[person_idx_in_frame]
+            
             if person_id not in person_tracks:
                 person_tracks[person_id] = []
             
@@ -191,8 +207,12 @@ def smooth_camera_parameters(outputs_list, id_batch_list, smoothing_factor=0.5):
         
         # Apply smoothed values back to outputs
         for track_idx, (frame_idx, person_idx_in_frame, _, _) in enumerate(track):
-            smoothed_outputs[frame_idx][person_idx_in_frame]['pred_cam_t'] = smoothed_cam_t[track_idx]
-            smoothed_outputs[frame_idx][person_idx_in_frame]['focal_length'] = smoothed_focal[track_idx]
+            # Verify bounds before accessing
+            if frame_idx < len(smoothed_outputs) and person_idx_in_frame < len(smoothed_outputs[frame_idx]):
+                smoothed_outputs[frame_idx][person_idx_in_frame]['pred_cam_t'] = smoothed_cam_t[track_idx]
+                smoothed_outputs[frame_idx][person_idx_in_frame]['focal_length'] = smoothed_focal[track_idx]
+            else:
+                print(f"Warning: Skipping smoothing update for frame {frame_idx}, person {person_idx_in_frame} (out of bounds)")
     
     return smoothed_outputs
 
