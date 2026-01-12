@@ -390,16 +390,19 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                 occ_v.pop(i)
 
     # Prepare camera intrinsics list (only for non-empty frames)
+    # cam_int_list is indexed by original frame index (0 to n-1)
     cam_int_batch = None
     if cam_int_list is not None:
         cam_int_batch = []
-        frame_idx = 0
         for i in range(n):
             if i in empty_frame_list:
                 continue
-            if frame_idx < len(cam_int_list):
-                cam_int_batch.append(cam_int_list[frame_idx])
-            frame_idx += 1
+            # Use original frame index i to index into cam_int_list
+            if i < len(cam_int_list) and cam_int_list[i] is not None:
+                cam_int_batch.append(cam_int_list[i])
+            else:
+                # If no calibration for this frame, append None
+                cam_int_batch.append(None)
     
     outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True, cam_int=cam_int_batch)
 
