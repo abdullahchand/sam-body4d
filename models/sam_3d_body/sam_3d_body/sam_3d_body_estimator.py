@@ -199,11 +199,9 @@ class SAM3DBodyEstimator:
                 # Use provided camera intrinsics for this frame
                 import torch
                 cam_int_np = cam_int[i]  # 3x3 numpy array
-                # Convert to torch tensor and expand for batch
+                # Convert to torch tensor with shape [1, 3, 3] (one per frame, not per person)
+                # The model will expand it to match number of people later
                 cam_int_tensor = torch.from_numpy(cam_int_np).float().unsqueeze(0)  # [1, 3, 3]
-                # Expand to match number of people in this frame
-                num_people = batch["img"].shape[1]
-                cam_int_tensor = cam_int_tensor.expand(num_people, -1, -1)  # [num_people, 3, 3]
                 cam_int_tensor = cam_int_tensor.to(batch["img"].device)
                 batch["cam_int"] = cam_int_tensor.clone()
             elif self.fov_estimator is not None:
