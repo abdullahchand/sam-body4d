@@ -288,12 +288,22 @@ def display_results_grid(
     plt.show()
 
 
-def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict):
+def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int_list=None):
     """
     Process image with external mask input.
 
     Note: The refactored code requires bboxes to be provided along with masks.
     This function automatically computes bboxes from the mask.
+    
+    Args:
+        estimator: SAM3DBodyEstimator instance
+        image_path: List of image paths
+        mask_path: List of mask paths
+        idx_path: Dictionary mapping object IDs to paths
+        idx_dict: Dictionary mapping object IDs to (start, end) frame ranges
+        mhr_shape_scale_dict: Dictionary for MHR shape and scale
+        occ_dict: Dictionary for occlusion information
+        cam_int_list: Optional list of camera intrinsics matrices (one per frame), or None
     """
     # load in batches
     image_batch = []
@@ -379,7 +389,19 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True)
+    # Prepare camera intrinsics list (only for non-empty frames)
+    cam_int_batch = None
+    if cam_int_list is not None:
+        cam_int_batch = []
+        frame_idx = 0
+        for i in range(n):
+            if i in empty_frame_list:
+                continue
+            if frame_idx < len(cam_int_list):
+                cam_int_batch.append(cam_int_list[frame_idx])
+            frame_idx += 1
+    
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True, cam_int=cam_int_batch)
 
     return outputs, id_batch, empty_frame_list
 

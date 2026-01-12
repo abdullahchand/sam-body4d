@@ -17,6 +17,7 @@ def gen_id():
     return f"{t}_{u}"
 
 import argparse
+import json
 import time
 import cv2
 import glob
@@ -217,6 +218,110 @@ def smooth_camera_parameters(outputs_list, id_batch_list, smoothing_factor=0.5):
     return smoothed_outputs
 
 
+def load_calibration_json(calib_path: str) -> dict:
+    """
+    Load camera calibration from JSON file.
+    
+    Args:
+        calib_path: Path to the calibration JSON file
+        
+    Returns:
+        Dictionary with calibration data, or None if file doesn't exist
+    """
+    if not os.path.exists(calib_path):
+        return None
+    
+    try:
+        with open(calib_path, 'r') as f:
+            calib_data = json.load(f)
+        return calib_data
+    except Exception as e:
+        print(f"Warning: Failed to load calibration from {calib_path}: {e}")
+        return None
+
+
+def calibration_to_intrinsics_matrix(calib_data: dict) -> np.ndarray:
+    """
+    Convert calibration JSON data to camera intrinsics matrix.
+    
+    Args:
+        calib_data: Dictionary containing calibration data from JSON
+        
+    Returns:
+        3x3 numpy array representing the camera intrinsics matrix K
+    """
+    if calib_data is None:
+        return None
+    
+    # Use intrinsic_matrix if available, otherwise construct from intrinsics
+    if 'intrinsic_matrix' in calib_data and calib_data['intrinsic_matrix']:
+        K = np.array(calib_data['intrinsic_matrix'], dtype=np.float32)
+    elif 'intrinsics' in calib_data:
+        intrinsics = calib_data['intrinsics']
+        K = np.eye(3, dtype=np.float32)
+        K[0, 0] = intrinsics.get('fx', 5000.0)
+        K[1, 1] = intrinsics.get('fy', intrinsics.get('fx', 5000.0))  # Use fx if fy not available
+        K[0, 2] = intrinsics.get('cx', 0.0)
+        K[1, 2] = intrinsics.get('cy', 0.0)
+    else:
+        # Fallback: use field of view to estimate focal length
+        if 'field_of_view' in calib_data:
+            vfov_rad = calib_data['field_of_view'].get('vfov_rad')
+            frame_height = calib_data.get('frame_height', 1080)
+            if vfov_rad:
+                focal = frame_height / (2 * np.tan(vfov_rad / 2))
+            else:
+                focal = 5000.0
+        else:
+            focal = 5000.0
+        
+        K = np.eye(3, dtype=np.float32)
+        K[0, 0] = K[1, 1] = focal
+        K[0, 2] = calib_data.get('frame_width', 1920) / 2.0
+        K[1, 2] = calib_data.get('frame_height', 1080) / 2.0
+    
+    return K
+
+
+def load_frame_calibrations(calib_dir: str, frame_indices: list, enable_external_calib: bool = True) -> list:
+    """
+    Load camera calibrations for a list of frame indices.
+    
+    Args:
+        calib_dir: Directory path where calibration JSON files are stored (can be absolute or relative)
+        frame_indices: List of frame indices to load calibrations for
+        enable_external_calib: Whether to enable external calibration loading
+        
+    Returns:
+        List of camera intrinsics matrices (3x3 numpy arrays) or None for each frame
+    """
+    if not enable_external_calib:
+        return [None] * len(frame_indices)
+    
+    if not calib_dir:
+        return [None] * len(frame_indices)
+    
+    # Expand user path and make absolute if relative
+    calib_dir = os.path.expanduser(calib_dir)
+    if not os.path.isabs(calib_dir):
+        # If relative, it's relative to the current working directory
+        calib_dir = os.path.abspath(calib_dir)
+    
+    calibrations = []
+    
+    for frame_idx in frame_indices:
+        calib_path = os.path.join(calib_dir, f"frame_{frame_idx:06d}.json")
+        calib_data = load_calibration_json(calib_path)
+        
+        if calib_data:
+            K = calibration_to_intrinsics_matrix(calib_data)
+            calibrations.append(K)
+        else:
+            calibrations.append(None)
+    
+    return calibrations
+
+
 def build_diffusion_vas_config(cfg):
     model_path_mask = cfg.completion['model_path_mask']
     model_path_rgb = cfg.completion['model_path_rgb']
@@ -260,6 +365,8 @@ class OfflineApp:
         self.RUNTIME['completion_resolution'] = self.CONFIG.completion.get('completion_resolution', [512, 1024])
         self.RUNTIME['smpl_export'] = self.CONFIG.runtime.get('smpl_export', False)
         self.RUNTIME['bboxes'] = None
+        self.RUNTIME['enable_external_calib'] = self.CONFIG.runtime.get('enable_external_calib', False)
+        self.RUNTIME['calib_dir'] = self.CONFIG.runtime.get('calib_dir', None)  # Path to calibration JSON files folder
 
     def on_mask_generation(self, video_path: str=None, start_frame_idx: int = 0, max_frame_num_to_track: int = 1800):
         """
@@ -614,8 +721,36 @@ class OfflineApp:
                 for obj_id in self.RUNTIME['out_obj_ids']:
                     occ_dict[obj_id] = [1] * len(batch_masks)
 
+            # Load external camera calibrations for this batch if enabled
+            cam_int_batch = None
+            if self.RUNTIME.get('enable_external_calib', False):
+                calib_dir = self.RUNTIME.get('calib_dir', None)
+                if calib_dir:
+                    # Calculate global frame indices for this batch
+                    global_frame_indices = list(range(i, min(i + batch_size, n)))
+                    cam_int_batch = load_frame_calibrations(
+                        calib_dir, 
+                        global_frame_indices,
+                        enable_external_calib=True
+                    )
+                    # Count how many calibrations were loaded
+                    loaded_count = sum(1 for c in cam_int_batch if c is not None)
+                    if loaded_count > 0:
+                        print(f"Loaded {loaded_count}/{len(cam_int_batch)} external camera calibrations for batch starting at frame {i}")
+                else:
+                    print(f"Warning: enable_external_calib is True but calib_dir is not set in config. Skipping external calibration.")
+            
             # Process with external mask
-            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(
+                self.sam3_3d_body_model, 
+                batch_images, 
+                batch_masks, 
+                idx_path, 
+                idx_dict, 
+                mhr_shape_scale_dict, 
+                occ_dict,
+                cam_int_list=cam_int_batch
+            )
             
             # Accumulate outputs for smoothing
             all_mask_outputs.append(mask_outputs)

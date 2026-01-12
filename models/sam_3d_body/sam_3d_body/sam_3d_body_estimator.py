@@ -195,25 +195,26 @@ class SAM3DBodyEstimator:
 
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
-            # if cam_int is not None:
-            #     # print("Using provided camera intrinsics...")
-            #     cam_int = cam_int.to(batch["img"])
-            #     batch["cam_int"] = cam_int.clone()
-            # elif self.fov_estimator is not None:
-            #     print("Running FOV estimator ...")
-            #     input_image = batch["img_ori"][0].data
-            #     cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
-            #         batch["img"]
-            #     )
-            #     batch["cam_int"] = cam_int.clone()
-            # else:
-            #     cam_int = batch["cam_int"].clone()
-
-            input_image = batch["img_ori"][0].data
-            cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
-                batch["img"]
-            )
-            batch["cam_int"] = cam_int.clone()
+            if cam_int is not None and i < len(cam_int) and cam_int[i] is not None:
+                # Use provided camera intrinsics for this frame
+                import torch
+                cam_int_np = cam_int[i]  # 3x3 numpy array
+                # Convert to torch tensor and expand for batch
+                cam_int_tensor = torch.from_numpy(cam_int_np).float().unsqueeze(0)  # [1, 3, 3]
+                # Expand to match number of people in this frame
+                num_people = batch["img"].shape[1]
+                cam_int_tensor = cam_int_tensor.expand(num_people, -1, -1)  # [num_people, 3, 3]
+                cam_int_tensor = cam_int_tensor.to(batch["img"].device)
+                batch["cam_int"] = cam_int_tensor.clone()
+            elif self.fov_estimator is not None:
+                print("Running FOV estimator ...")
+                input_image = batch["img_ori"][0].data
+                cam_int_estimated = self.fov_estimator.get_cam_intrinsics(input_image).to(
+                    batch["img"]
+                )
+                batch["cam_int"] = cam_int_estimated.clone()
+            else:
+                batch["cam_int"] = batch["cam_int"].clone()
 
             batch_list.append(batch)
 
