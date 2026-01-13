@@ -197,7 +197,6 @@ class SAM3DBodyEstimator:
         # - either provided externally or generated via default FOV estimator
             if cam_int is not None and i < len(cam_int) and cam_int[i] is not None:
                 # Use provided camera intrinsics for this frame
-                import torch
                 cam_int_np = cam_int[i]  # 3x3 numpy array
                 # Convert to torch tensor with shape [1, 3, 3] (one per frame, not per person)
                 # The model will expand it to match number of people later
